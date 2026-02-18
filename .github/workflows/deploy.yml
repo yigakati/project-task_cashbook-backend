@@ -52,6 +52,10 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
+            # --- CRITICAL FIX: Point kubectl to your user's config file ---
+            # This prevents the "permission denied" error on /etc/rancher/k3s/k3s.yaml
+            export KUBECONFIG=~/.kube/config
+
             # 1. Update the Deployment to use the new image SHA
             # K3s will see the new hash and automatically pull it (because of imagePullPolicy: Always)
             kubectl set image deployment/cashbook-app \
