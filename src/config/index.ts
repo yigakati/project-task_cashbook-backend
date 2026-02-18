@@ -19,7 +19,7 @@ const envSchema = z.object({
     JWT_REFRESH_EXPIRY: z.string().default('7d'),
     BCRYPT_SALT_ROUNDS: z.coerce.number().default(12),
 
-    COOKIE_DOMAIN: z.string().default('localhost'),
+    COOKIE_DOMAIN: z.string().default(''),
     COOKIE_SECURE: z.string().default('false').transform((val) => val === 'true'),
     COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).default('lax'),
 
