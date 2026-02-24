@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, TransactionSourceType } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { EntriesRepository } from './entries.repository';
 import {
@@ -93,6 +93,21 @@ export class EntriesService {
 
         const amount = new Decimal(dto.amount);
 
+        // Account Logic - Pre-validation
+        if (dto.accountId) {
+            const account = await this.prisma.account.findUnique({
+                where: { id: dto.accountId }
+            });
+
+            if (!account || account.workspaceId !== cashbook.workspaceId) {
+                throw new AppError('Invalid account selected', 400, 'INVALID_ACCOUNT');
+            }
+
+            if (account.archivedAt) {
+                throw new AppError('Cannot create entries for an archived account', 400, 'ACCOUNT_ARCHIVED');
+            }
+        }
+
         // Use transaction for concurrency safety
         const entry = await this.prisma.$transaction(async (tx) => {
             // Create entry
@@ -136,6 +151,45 @@ export class EntriesService {
             const balanceAfter = isIncome
                 ? balanceBefore.add(amount)
                 : balanceBefore.sub(amount);
+
+            if (dto.accountId) {
+                // 1. Lock the account row to prevent race conditions
+                await tx.$queryRaw`SELECT id FROM accounts WHERE id = ${dto.accountId}::uuid FOR UPDATE`;
+
+                // 2. Fetch the latest balance after lock
+                const lockedAccount = await tx.account.findUniqueOrThrow({
+                    where: { id: dto.accountId }
+                });
+
+                // 3. Prevent Negative Balance if allowNegative is false
+                if (!lockedAccount.allowNegative && !isIncome) {
+                    const newAccountBalance = lockedAccount.balance.sub(amount);
+                    if (newAccountBalance.lessThan(0)) {
+                        throw new AppError(`Transaction exceeds account balance. Current balance is ${lockedAccount.balance.toString()}`, 400, 'INSUFFICIENT_FUNDS');
+                    }
+                }
+
+                // 4. Update the account balance
+                await tx.account.update({
+                    where: { id: dto.accountId },
+                    data: {
+                        balance: isIncome ? { increment: amount } : { decrement: amount }
+                    }
+                });
+
+                // 5. Create the ledger link
+                await tx.accountTransaction.create({
+                    data: {
+                        workspaceId: cashbook.workspaceId,
+                        accountId: dto.accountId,
+                        sourceType: TransactionSourceType.CASHBOOK_ENTRY,
+                        sourceId: newEntry.id,
+                        type: dto.type as any,
+                        amount,
+                        description: newEntry.description,
+                    }
+                });
+            }
 
             // Create entry audit
             await tx.entryAudit.create({
@@ -207,6 +261,12 @@ export class EntriesService {
         const newValues: Record<string, any> = {};
         const changes: Record<string, { from: any; to: any }> = {};
 
+        // Find existing account transaction, if any
+        const existingTx = await this.prisma.accountTransaction.findFirst({
+            where: { sourceId: entryId, sourceType: TransactionSourceType.CASHBOOK_ENTRY }
+        });
+        const hasAccountChanged = dto.accountId !== undefined && dto.accountId !== (existingTx?.accountId || null);
+
         // Track changes
         if (dto.type && dto.type !== entry.type) {
             oldValues.type = entry.type;
@@ -270,6 +330,86 @@ export class EntriesService {
             balanceAfter = isIncome
                 ? balanceAfter.add(newAmount)
                 : balanceAfter.sub(newAmount);
+
+            // Deal with Accounts
+            if (existingTx || dto.accountId) {
+                const needsReversal = existingTx && (hasAccountChanged || oldAmount.toString() !== newAmount.toString() || wasIncome !== isIncome);
+
+                if (needsReversal) {
+                    // Lock Old Account
+                    await tx.$queryRaw`SELECT id FROM accounts WHERE id = ${existingTx.accountId}::uuid FOR UPDATE`;
+                    // Reverse balance on old account
+                    await tx.account.update({
+                        where: { id: existingTx.accountId },
+                        data: {
+                            balance: wasIncome ? { decrement: oldAmount } : { increment: oldAmount }
+                        }
+                    });
+                }
+
+                const targetAccountId = dto.accountId !== undefined ? dto.accountId : existingTx?.accountId;
+
+                if (targetAccountId) {
+                    const needsApply = hasAccountChanged || oldAmount.toString() !== newAmount.toString() || wasIncome !== isIncome;
+
+                    if (needsApply || !existingTx) {
+                        // Check archive status
+                        const targetAccount = await tx.account.findUniqueOrThrow({ where: { id: targetAccountId } });
+                        if (targetAccount.archivedAt && targetAccountId !== existingTx?.accountId) {
+                            throw new AppError('Cannot move entry to an archived account', 400, 'ACCOUNT_ARCHIVED');
+                        }
+
+                        // Lock Target Account
+                        await tx.$queryRaw`SELECT id FROM accounts WHERE id = ${targetAccountId}::uuid FOR UPDATE`;
+                        const lockedTarget = await tx.account.findUniqueOrThrow({ where: { id: targetAccountId } });
+
+                        // Negative Balance Check
+                        if (!lockedTarget.allowNegative && !isIncome) {
+                            const provisional = lockedTarget.balance.sub(newAmount);
+                            if (provisional.lessThan(0)) {
+                                throw new AppError(`Transaction exceeds account balance.`, 400, 'INSUFFICIENT_FUNDS');
+                            }
+                        }
+
+                        // Apply new balance
+                        await tx.account.update({
+                            where: { id: targetAccountId },
+                            data: {
+                                balance: isIncome ? { increment: newAmount } : { decrement: newAmount }
+                            }
+                        });
+                    }
+
+                    if (existingTx) {
+                        // Update existing AccountTransaction
+                        await tx.accountTransaction.update({
+                            where: { id: existingTx.id },
+                            data: {
+                                ...(hasAccountChanged && { accountId: targetAccountId }),
+                                amount: newAmount,
+                                type: newType as any,
+                                description: dto.description || existingTx.description
+                            }
+                        });
+                    } else {
+                        // Create new one
+                        await tx.accountTransaction.create({
+                            data: {
+                                workspaceId: cashbook.workspaceId,
+                                accountId: targetAccountId,
+                                sourceType: TransactionSourceType.CASHBOOK_ENTRY,
+                                sourceId: entryId,
+                                type: newType as any,
+                                amount: newAmount,
+                                description: dto.description || entry.description
+                            }
+                        });
+                    }
+                } else if (existingTx && dto.accountId === null) {
+                    // They removed the account entirely
+                    await tx.accountTransaction.delete({ where: { id: existingTx.id } });
+                }
+            }
 
             // Update entry
             const updatedEntry = await tx.entry.update({
@@ -482,6 +622,22 @@ export class EntriesService {
             const balanceAfter = wasIncome
                 ? balanceBefore.sub(amount)
                 : balanceBefore.add(amount);
+
+            // Reverse Account balance if linked
+            const existingTx = await tx.accountTransaction.findFirst({
+                where: { sourceId: entry.id, sourceType: TransactionSourceType.CASHBOOK_ENTRY }
+            });
+
+            if (existingTx) {
+                await tx.$queryRaw`SELECT id FROM accounts WHERE id = ${existingTx.accountId}::uuid FOR UPDATE`;
+                await tx.account.update({
+                    where: { id: existingTx.accountId },
+                    data: {
+                        balance: wasIncome ? { decrement: amount } : { increment: amount }
+                    }
+                });
+                await tx.accountTransaction.delete({ where: { id: existingTx.id } });
+            }
 
             // Soft-delete the entry
             await tx.entry.update({

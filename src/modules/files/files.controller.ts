@@ -35,9 +35,10 @@ export class FilesController {
     async getAll(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const attachments = await this.filesService.getAttachments(req.params.entryId as string);
+
             res.status(StatusCodes.OK).json({
                 success: true,
-                message: 'Attachments retrieved',
+                message: 'Attachments retrieved successfully',
                 data: attachments,
             });
         } catch (error) {
@@ -46,27 +47,19 @@ export class FilesController {
     }
 
     /**
-     * Proxy-stream a file from MinIO → response.
-     * Sets Content-Type and Content-Disposition: inline.
+     * Generates and returns a secure, short-lived Presigned URL from MinIO.
+     * The frontend will use this URL to download the file directly.
      */
-    async viewFile(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async getFileUrl(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const { stream, fileName, mimeType, fileSize } = await this.filesService.streamFile(
+            const fileData = await this.filesService.getPresignedUrl(
                 req.params.attachmentId as string
             );
 
-            res.setHeader('Content-Type', mimeType);
-            res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
-            if (fileSize) {
-                res.setHeader('Content-Length', fileSize);
-            }
-
-            stream.pipe(res);
-
-            stream.on('error', (err) => {
-                if (!res.headersSent) {
-                    next(new AppError('Failed to stream file', 500, 'STREAM_ERROR'));
-                }
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'File URL generated successfully',
+                data: fileData, 
             });
         } catch (error) {
             next(error);
@@ -76,9 +69,10 @@ export class FilesController {
     async delete(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             await this.filesService.deleteAttachment(req.params.attachmentId as string, req.user.userId);
+
             res.status(StatusCodes.OK).json({
                 success: true,
-                message: 'Attachment deleted',
+                message: 'Attachment deleted successfully',
             });
         } catch (error) {
             next(error);

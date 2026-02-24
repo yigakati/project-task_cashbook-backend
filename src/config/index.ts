@@ -28,12 +28,12 @@ const envSchema = z.object({
     RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
     RATE_LIMIT_MAX: z.coerce.number().default(100),
 
-    MINIO_ENDPOINT: z.string().optional().default('localhost'),
-    MINIO_PORT: z.coerce.number().optional().default(9000),
-    MINIO_USE_SSL: z.string().optional().default('false').transform((v) => v === 'true'),
-    MINIO_ACCESS_KEY: z.string().min(1, 'MINIO_ACCESS_KEY is required').optional(),
-    MINIO_SECRET_KEY: z.string().min(1, 'MINIO_SECRET_KEY is required').optional(),
-    MINIO_BUCKET: z.string().optional().default('cashbook-attachments'),
+    MINIO_ENDPOINT: z.string().default('localhost'),
+    MINIO_PORT: z.coerce.number().default(9000),
+    MINIO_USE_SSL: z.string().default('false').transform((v) => v === 'true'),
+    MINIO_ACCESS_KEY: z.string().min(1, 'MINIO_ACCESS_KEY is required'),
+    MINIO_SECRET_KEY: z.string().min(1, 'MINIO_SECRET_KEY is required'),
+    MINIO_BUCKET: z.string().default('cashbook-attachments'),
 
     SMTP_HOST: z.string().default('smtp.gmail.com'),
     SMTP_PORT: z.coerce.number().default(587),

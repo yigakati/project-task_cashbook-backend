@@ -5,7 +5,7 @@ import { config } from './config';
 import { logger } from './utils/logger';
 import { getPrismaClient } from './config/database';
 import { getRedisClient } from './config/redis';
-// import { ensureBucket } from './config/minio';
+import { ensureBucket } from './config/minio';
 import { startWorkers, stopWorkers } from './workers';
 
 const PORT = config.PORT;
@@ -27,11 +27,11 @@ async function bootstrap() {
         }
 
         // Ensure MinIO bucket exists
-        // try {
-        //     await ensureBucket();
-        // } catch (minioError) {
-        //     logger.warn('⚠️  MinIO connection failed, file features may be degraded', { error: minioError });
-        // }
+        try {
+            await ensureBucket();
+        } catch (minioError) {
+            logger.warn('⚠️  MinIO connection failed, file features may be degraded', { error: minioError });
+        }
 
         // Start BullMQ workers
         let workers: ReturnType<typeof startWorkers> | null = null;

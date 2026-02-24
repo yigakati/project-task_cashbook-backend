@@ -93,6 +93,9 @@ model Workspace {
   auditLogs          AuditLog[]
   financialAuditLogs FinancialAuditLog[]
   pendingInvites     PendingInvite[]
+  accountTypes       AccountType[]
+  accounts           Account[]
+  accountCategories  AccountCategory[]
 
   @@index([ownerId])
   @@index([type])
@@ -179,14 +182,15 @@ model Entry {
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  cashbook       Cashbook        @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
-  category       Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  contact        Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  paymentMode    PaymentMode?    @relation(fields: [paymentModeId], references: [id], onDelete: SetNull)
-  createdBy      User            @relation(fields: [createdById], references: [id])
-  audits         EntryAudit[]
-  deleteRequests DeleteRequest[]
-  attachments    Attachment[]
+  cashbook            Cashbook             @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
+  category            Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  contact             Contact?             @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  paymentMode         PaymentMode?         @relation(fields: [paymentModeId], references: [id], onDelete: SetNull)
+  createdBy           User                 @relation(fields: [createdById], references: [id])
+  audits              EntryAudit[]
+  deleteRequests      DeleteRequest[]
+  attachments         Attachment[]
+  accountTransactions AccountTransaction[]
 
   @@index([cashbookId])
   @@index([entryDate])
@@ -304,21 +308,24 @@ model PaymentMode {
 // ─── Attachment ────────────────────────────────────────
 
 model Attachment {
-  id           String   @id @default(uuid()) @db.Uuid
-  cashbookId   String   @map("cashbook_id") @db.Uuid
-  entryId      String?  @map("entry_id") @db.Uuid
-  fileName     String   @map("file_name")
-  fileSize     Int      @map("file_size")
-  mimeType     String   @map("mime_type")
-  s3Key        String   @map("s3_key")
-  uploadedById String   @map("uploaded_by_id") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at")
+  id           String    @id @default(uuid()) @db.Uuid
+  cashbookId   String    @map("cashbook_id") @db.Uuid
+  entryId      String?   @map("entry_id") @db.Uuid
+  fileName     String    @map("file_name")
+  fileSize     Int       @map("file_size")
+  mimeType     String    @map("mime_type")
+  s3Key        String    @map("s3_key")
+  uploadedById String    @map("uploaded_by_id") @db.Uuid
+  isDeleted    Boolean   @default(false) @map("is_deleted") // NEW
+  deletedAt    DateTime? @map("deleted_at") // NEW
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   cashbook Cashbook @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
   entry    Entry?   @relation(fields: [entryId], references: [id], onDelete: SetNull)
 
   @@index([cashbookId])
   @@index([entryId])
+  @@index([isDeleted]) // Recommended for faster filtering
   @@map("attachments")
 }
 
@@ -426,4 +433,92 @@ model PendingInvite {
   @@index([email])
   @@index([token])
   @@map("pending_invites")
+}
+
+// ─── Accounts Subsystem ─────────────────────────────────
+
+model AccountType {
+  id             String                @id @default(uuid()) @db.Uuid
+  workspaceId    String                @map("workspace_id") @db.Uuid
+  name           String
+  classification AccountClassification
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accounts  Account[]
+
+  @@unique([name, workspaceId])
+  @@map("account_types")
+}
+
+model Account {
+  id               String    @id @default(uuid()) @db.Uuid
+  workspaceId      String    @map("workspace_id") @db.Uuid
+  accountTypeId    String    @map("account_type_id") @db.Uuid
+  name             String
+  currency         String
+  balance          Decimal   @default(0) @db.Decimal(20, 4)
+  icon             String?
+  excludeFromTotal Boolean   @default(false) @map("exclude_from_total")
+  allowNegative    Boolean   @default(false) @map("allow_negative")
+  note             String?
+  archivedAt       DateTime? @map("archived_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accountType  AccountType          @relation(fields: [accountTypeId], references: [id])
+  transactions AccountTransaction[]
+
+  @@index([workspaceId])
+  @@index([accountTypeId])
+  @@index([archivedAt])
+  @@map("accounts")
+}
+
+model AccountCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  name        String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  transactions AccountTransaction[]
+
+  @@unique([name, workspaceId])
+  @@map("account_categories")
+}
+
+model AccountTransaction {
+  id                String                @id @default(uuid()) @db.Uuid
+  workspaceId       String                @map("workspace_id") @db.Uuid
+  accountId         String                @map("account_id") @db.Uuid
+  sourceType        TransactionSourceType @map("source_type")
+  sourceId          String                @map("source_id") @db.Uuid
+  type              EntryType // income / expense
+  amount            Decimal               @db.Decimal(20, 4)
+  description       String
+  accountCategoryId String?               @map("account_category_id") @db.Uuid
+  createdAt         DateTime              @default(now()) @map("created_at")
+
+  account         Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  sourceEntry     Entry            @relation(fields: [sourceId], references: [id]) // Assuming CASHBOOK_ENTRY
+  accountCategory AccountCategory? @relation(fields: [accountCategoryId], references: [id], onDelete: SetNull)
+
+  @@unique([sourceId, accountId])
+  @@index([accountId])
+  @@index([sourceId])
+  @@index([workspaceId])
+  @@map("account_transactions")
+}
+
+enum AccountClassification {
+  ASSET
+  LIABILITY
+}
+
+enum TransactionSourceType {
+  CASHBOOK_ENTRY
 }

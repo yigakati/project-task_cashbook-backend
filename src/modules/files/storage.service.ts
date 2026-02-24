@@ -2,209 +2,142 @@ import { injectable } from 'tsyringe';
 import { Readable } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import * as fs from 'fs/promises';
 import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'fs/promises';
+
 import { getMinioClient } from '../../config/minio';
 import { config } from '../../config';
 import { minioBreaker } from '../../config/breakers';
 import { AppError } from '../../core/errors/AppError';
 import { logger } from '../../utils/logger';
 
-const execFileAsync = promisify(execFile);
-
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-
 const IMAGE_MIMES = new Set([
     'image/jpeg',
     'image/png',
     'image/gif',
     'image/webp',
 ]);
-
 const PDF_MIME = 'application/pdf';
 
 @injectable()
 export class StorageService {
     /**
-     * Validate, compress, and upload a file to MinIO.
-     * Images → WebP (Sharp). PDFs → Ghostscript compression.
-     * Returns the stored object name (filename in bucket).
+     * Entry point for file uploads.
+     * Reads from disk (multer.diskStorage), processes, and cleans up.
      */
     async processAndUpload(file: Express.Multer.File): Promise<{
         objectName: string;
         mimeType: string;
         fileSize: number;
     }> {
-        // ── Validation ──
-        if (file.size > MAX_FILE_SIZE) {
-            throw new AppError(
-                `File exceeds the ${MAX_FILE_SIZE / (1024 * 1024)}MB limit`,
-                400,
-                'FILE_TOO_LARGE'
-            );
-        }
-
-        // Verify magic numbers using file-type
-        const { fileTypeFromBuffer } = await import('file-type');
-        const detected = await fileTypeFromBuffer(file.buffer);
-
-        // CSV / plain text won't have a detectable type — allow if MIME matches
-        if (detected) {
-            const allowedMagic = [...IMAGE_MIMES, PDF_MIME];
-            if (
-                !allowedMagic.includes(detected.mime) &&
-                !['application/msword', 'application/zip'].includes(detected.mime)
-            ) {
-                throw new AppError(
-                    `File content does not match an allowed type. Detected: ${detected.mime}`,
-                    400,
-                    'INVALID_FILE_TYPE'
-                );
+        try {
+            // ── Validation ──
+            if (file.size > MAX_FILE_SIZE) {
+                throw new AppError(`File exceeds the 5MB limit`, 400, 'FILE_TOO_LARGE');
             }
-        }
 
-        // ── Route by type ──
-        if (IMAGE_MIMES.has(file.mimetype)) {
-            return this.processImage(file);
-        } else if (file.mimetype === PDF_MIME) {
-            return this.processPDF(file);
-        } else {
-            // Other allowed types (docs, xlsx, csv) — upload as-is
-            return this.uploadRaw(file);
+            // Verify magic numbers directly from the file on disk (reads only headers)
+            // Function constructor prevents TS from compiling the dynamic import into a broken require()
+            const { fileTypeFromFile } = await (new Function('return import("file-type")')());
+            const detected = await fileTypeFromFile(file.path);
+
+            if (detected) {
+                const allowedMagic = [...IMAGE_MIMES, PDF_MIME];
+                if (!allowedMagic.includes(detected.mime) &&
+                    !['application/msword', 'application/zip', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(detected.mime)) {
+                    throw new AppError(`Invalid file content: ${detected.mime}`, 400, 'INVALID_FILE_TYPE');
+                }
+            }
+
+            // ── Route by type ──
+            if (IMAGE_MIMES.has(file.mimetype)) {
+                return await this.processImage(file.path, file.originalname);
+            } else {
+                return await this.uploadRaw(file.path, file.originalname, file.mimetype);
+            }
+        } finally {
+            // ── Cleanup ──
+            // Always delete the temp file from the server disk to prevent storage leaks
+            try {
+                await fs.unlink(file.path);
+                logger.debug(`Temporary file deleted: ${file.path}`);
+            } catch (unlinkError) {
+                logger.error(`Failed to delete temp file: ${file.path}`, { unlinkError });
+            }
         }
     }
 
     /**
-     * Image pipeline: resize to max 1920px wide → convert to WebP (quality 80).
+     * Image pipeline: reads buffer -> processes via Sharp -> uploads to MinIO
      */
-    private async processImage(file: Express.Multer.File): Promise<{
+    private async processImage(filePath: string, originalName: string): Promise<{
         objectName: string;
         mimeType: string;
         fileSize: number;
     }> {
         const objectName = `attachments/${uuidv4()}.webp`;
 
-        const buffer = await sharp(file.buffer)
+        // Sharp streams directly from disk
+        const processedBuffer = await sharp(filePath)
             .resize({ width: 1920, withoutEnlargement: true })
             .webp({ quality: 80 })
             .toBuffer();
 
         const client = getMinioClient();
-        await minioBreaker.execute(() =>
-            client.putObject(config.MINIO_BUCKET, objectName, buffer, buffer.length, {
+
+        await minioBreaker.execute(
+            () => client.putObject(config.MINIO_BUCKET, objectName, processedBuffer, processedBuffer.length, {
                 'Content-Type': 'image/webp',
             })
         );
 
-        logger.debug('Image processed and uploaded', {
-            original: file.originalname,
-            originalSize: file.size,
-            compressedSize: buffer.length,
-            objectName,
-        });
-
-        return { objectName, mimeType: 'image/webp', fileSize: buffer.length };
+        return { objectName, mimeType: 'image/webp', fileSize: processedBuffer.length };
     }
 
     /**
-     * PDF pipeline: compress via Ghostscript (gs).
-     * Uses unique temp filenames to avoid collisions with concurrent uploads.
+     * Raw upload for PDFs and Docs
      */
-    private async processPDF(file: Express.Multer.File): Promise<{
+    private async uploadRaw(filePath: string, originalName: string, mimetype: string): Promise<{
         objectName: string;
         mimeType: string;
         fileSize: number;
     }> {
-        const uuid = uuidv4();
-        const tmpDir = os.tmpdir();
-        const inputPath = path.join(tmpDir, `${uuid}-input.pdf`);
-        const outputPath = path.join(tmpDir, `${uuid}-output.pdf`);
-        const objectName = `attachments/${uuid}.pdf`;
-
-        try {
-            // Write input to temp
-            await fs.writeFile(inputPath, file.buffer);
-
-            // Compress with Ghostscript
-            await execFileAsync('gs', [
-                '-sDEVICE=pdfwrite',
-                '-dCompatibilityLevel=1.4',
-                '-dPDFSETTINGS=/ebook',
-                '-dNOPAUSE',
-                '-dQUIET',
-                '-dBATCH',
-                `-sOutputFile=${outputPath}`,
-                inputPath,
-            ]);
-
-            // Upload compressed file directly from disk
-            const client = getMinioClient();
-            await minioBreaker.execute(() =>
-                client.fPutObject(config.MINIO_BUCKET, objectName, outputPath, {
-                    'Content-Type': 'application/pdf',
-                })
-            );
-
-            const stat = await fs.stat(outputPath);
-
-            logger.debug('PDF compressed and uploaded', {
-                original: file.originalname,
-                originalSize: file.size,
-                compressedSize: stat.size,
-                objectName,
-            });
-
-            return { objectName, mimeType: 'application/pdf', fileSize: stat.size };
-        } catch (error) {
-            // If Ghostscript fails, upload the original PDF
-            logger.warn('Ghostscript compression failed, uploading original PDF', { error });
-
-            const client = getMinioClient();
-            await minioBreaker.execute(() =>
-                client.putObject(config.MINIO_BUCKET, objectName, file.buffer, file.size, {
-                    'Content-Type': 'application/pdf',
-                })
-            );
-
-            return { objectName, mimeType: 'application/pdf', fileSize: file.size };
-        } finally {
-            // Always clean up temp files
-            await fs.unlink(inputPath).catch(() => { });
-            await fs.unlink(outputPath).catch(() => { });
-        }
-    }
-
-    /**
-     * Upload other file types (docs, xlsx, csv) as-is.
-     */
-    private async uploadRaw(file: Express.Multer.File): Promise<{
-        objectName: string;
-        mimeType: string;
-        fileSize: number;
-    }> {
-        const ext = path.extname(file.originalname) || '';
+        const ext = path.extname(originalName) || '';
         const objectName = `attachments/${uuidv4()}${ext}`;
 
         const client = getMinioClient();
-        await minioBreaker.execute(() =>
-            client.putObject(config.MINIO_BUCKET, objectName, file.buffer, file.size, {
-                'Content-Type': file.mimetype,
+        const stat = await fs.stat(filePath);
+
+        // fPutObject streams natively from disk to MinIO without eating RAM
+        await minioBreaker.execute(
+            () => client.fPutObject(config.MINIO_BUCKET, objectName, filePath, {
+                'Content-Type': mimetype,
             })
         );
 
-        return { objectName, mimeType: file.mimetype, fileSize: file.size };
+        return { objectName, mimeType: mimetype, fileSize: stat.size };
     }
 
     /**
-     * Stream a file from MinIO. Returns a Readable stream.
+     * Generate a temporary Presigned URL (15 mins default)
+     */
+    async generatePresignedUrl(objectName: string, expiryInSeconds: number = 900): Promise<string> {
+        const client = getMinioClient();
+
+        return minioBreaker.execute(
+            () => client.presignedGetObject(config.MINIO_BUCKET, objectName, expiryInSeconds)
+        );
+    }
+
+    /**
+     * Stream a file from MinIO. 
+     * Note: Kept for internal processing/reporting jobs, but no longer used for client downloads.
      */
     async getObject(objectName: string): Promise<Readable> {
         const client = getMinioClient();
-        return minioBreaker.execute(() =>
-            client.getObject(config.MINIO_BUCKET, objectName)
+        return minioBreaker.execute(
+            () => client.getObject(config.MINIO_BUCKET, objectName)
         );
     }
 
@@ -213,18 +146,19 @@ export class StorageService {
      */
     async statObject(objectName: string) {
         const client = getMinioClient();
-        return minioBreaker.execute(() =>
-            client.statObject(config.MINIO_BUCKET, objectName)
+        return minioBreaker.execute(
+            () => client.statObject(config.MINIO_BUCKET, objectName)
         );
     }
 
     /**
      * Delete an object from MinIO.
+     * Note: Kept for administrative cleanup jobs. User deletions are now soft-deleted in the DB.
      */
     async deleteObject(objectName: string): Promise<void> {
         const client = getMinioClient();
-        await minioBreaker.execute(() =>
-            client.removeObject(config.MINIO_BUCKET, objectName)
+        await minioBreaker.execute(
+            () => client.removeObject(config.MINIO_BUCKET, objectName)
         );
     }
 

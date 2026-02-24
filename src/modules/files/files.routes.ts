@@ -2,45 +2,56 @@ import { Router } from 'express';
 import { container } from 'tsyringe';
 import { FilesController } from './files.controller';
 import { authenticate } from '../../middlewares/authenticate';
-import { requireCashbookMember } from '../../middlewares/authorize';
 import { CashbookPermission } from '../../core/types/permissions';
-import { upload, validateFileContent } from '../../middlewares/upload';
-import { uploadRateLimiter } from '../../middlewares/rateLimiter';
+import { requireCashbookMember } from '../../middlewares/authorize';
+import { upload } from '../../middlewares/upload';
 
-const router = Router({ mergeParams: true });
-const filesController = container.resolve(FilesController);
+const router = Router();
+const controller = container.resolve(FilesController);
 
+/**
+ * All routes here require authentication
+ */
 router.use(authenticate as any);
 
-// Upload attachment to an entry
+/**
+ * Upload an attachment to a specific entry
+ * POST /api/files/cashbooks/:cashbookId/entries/:entryId
+ */
 router.post(
-    '/entry/:entryId/cashbook/:cashbookId',
-    uploadRateLimiter,
+    '/cashbooks/:cashbookId/entries/:entryId',
     requireCashbookMember(CashbookPermission.CREATE_ENTRY) as any,
     upload.single('file'),
-    validateFileContent,
-    filesController.upload.bind(filesController) as any
+    controller.upload.bind(controller) as any
 );
 
-// Get all attachments for an entry
+/**
+ * Get all attachments for an entry
+ * GET /api/files/entries/:entryId
+ */
 router.get(
-    '/entry/:entryId/cashbook/:cashbookId',
-    requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
-    filesController.getAll.bind(filesController) as any
+    '/entries/:entryId',
+    controller.getAll.bind(controller) as any
 );
 
-// View/stream file (proxy from MinIO)
+/**
+ * Get a secure, temporary Presigned URL for an attachment
+ * GET /api/files/:attachmentId/url/cashbooks/:cashbookId
+ */
 router.get(
-    '/:attachmentId/view/cashbook/:cashbookId',
-    requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
-    filesController.viewFile.bind(filesController) as any
+    '/:attachmentId/url/cashbooks/:cashbookId',
+    requireCashbookMember(CashbookPermission.VIEW_ATTACHMENTS) as any,
+    controller.getFileUrl.bind(controller) as any
 );
 
-// Delete attachment
+/**
+ * Soft-delete an attachment
+ * DELETE /api/files/:attachmentId/cashbooks/:cashbookId
+ */
 router.delete(
-    '/:attachmentId/cashbook/:cashbookId',
-    requireCashbookMember(CashbookPermission.DELETE_ENTRY) as any,
-    filesController.delete.bind(filesController) as any
+    '/:attachmentId/cashbooks/:cashbookId',
+    requireCashbookMember(CashbookPermission.DELETE_ATTACHMENT) as any,
+    controller.delete.bind(controller) as any
 );
 
 export default router;

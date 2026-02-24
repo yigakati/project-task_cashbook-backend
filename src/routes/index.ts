@@ -14,6 +14,9 @@ import reportsRoutes from '../modules/reports/reports.routes';
 import auditRoutes from '../modules/audit/audit.routes';
 import adminRoutes from '../modules/admin/admin.routes';
 import invitesRoutes from '../modules/invites/invites.routes';
+import accountTypesRoutes from '../modules/account-types/account-types.routes';
+import accountCategoriesRoutes from '../modules/account-categories/account-categories.routes';
+import accountsRoutes from '../modules/accounts/accounts.routes';
 
 const router = Router();
 
@@ -25,6 +28,9 @@ router.use('/auth', authRoutes);
 router.use('/users', usersRoutes);
 router.use('/workspaces', workspacesRoutes);
 router.use('/workspaces/:workspaceId/members', membersRoutes);
+router.use('/workspaces/:workspaceId/account-types', accountTypesRoutes);
+router.use('/workspaces/:workspaceId/account-categories', accountCategoriesRoutes);
+router.use('/workspaces/:workspaceId/accounts', accountsRoutes);
 router.use('/cashbooks', cashbooksRoutes);
 router.use('/entries', entriesRoutes);
 router.use('/categories', categoriesRoutes);

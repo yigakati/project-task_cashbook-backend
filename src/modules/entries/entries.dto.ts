@@ -12,6 +12,7 @@ export const createEntrySchema = z.object({
     categoryId: z.string().uuid().optional(),
     contactId: z.string().uuid().optional(),
     paymentModeId: z.string().uuid().optional(),
+    accountId: z.string().uuid().optional(),
     entryDate: z.string().datetime({ message: 'Entry date must be a valid ISO date' }),
 });
 
@@ -22,6 +23,7 @@ export const updateEntrySchema = z.object({
     categoryId: z.string().uuid().nullable().optional(),
     contactId: z.string().uuid().nullable().optional(),
     paymentModeId: z.string().uuid().nullable().optional(),
+    accountId: z.string().uuid().nullable().optional(),
     entryDate: z.string().datetime().optional(),
 });
 

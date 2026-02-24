@@ -17,7 +17,7 @@ export class FilesService {
         userId: string,
         file: Express.Multer.File
     ) {
-        // Verify entry belongs to cashbook
+        // Verify entry belongs to cashbook and isn't deleted
         const entry = await this.prisma.entry.findUnique({
             where: { id: entryId },
             include: { cashbook: true },
@@ -38,13 +38,14 @@ export class FilesService {
                     fileName: file.originalname,
                     mimeType,
                     fileSize,
-                    s3Key: objectName, // Field name kept for DB compatibility
+                    s3Key: objectName,
                 },
             });
 
             return attachment;
         } catch (error) {
             if (error instanceof AppError) throw error;
+            
             logger.error('File upload failed', { error });
             throw new AppError('File upload failed', 500, 'UPLOAD_FAILED');
         }
@@ -52,50 +53,61 @@ export class FilesService {
 
     async getAttachments(entryId: string) {
         return this.prisma.attachment.findMany({
-            where: { entryId },
+            where: { 
+                entryId,
+                isDeleted: false // Ensure we don't fetch soft-deleted attachments
+            },
             orderBy: { createdAt: 'desc' },
         });
     }
 
     /**
-     * Stream a file from MinIO. Returns the stream + metadata for piping to response.
+     * Generates a 15-minute Presigned URL for direct secure access from MinIO.
      */
-    async streamFile(attachmentId: string) {
+    async getPresignedUrl(attachmentId: string) {
         const attachment = await this.prisma.attachment.findUnique({
             where: { id: attachmentId },
         });
 
-        if (!attachment) {
+        if (!attachment || attachment.isDeleted) {
             throw new NotFoundError('Attachment');
         }
 
-        const stream = await this.storageService.getObject(attachment.s3Key);
+        // We will add generatePresignedUrl to the StorageService next.
+        // 900 seconds = 15 minutes.
+        const url = await this.storageService.generatePresignedUrl(attachment.s3Key, 900);
 
         return {
-            stream,
+            url,
             fileName: attachment.fileName,
             mimeType: attachment.mimeType,
             fileSize: attachment.fileSize,
         };
     }
 
+    /**
+     * Soft-deletes the attachment to maintain financial audit trails.
+     * The actual file remains safely in MinIO.
+     */
     async deleteAttachment(attachmentId: string, userId: string) {
         const attachment = await this.prisma.attachment.findUnique({
             where: { id: attachmentId },
         });
 
-        if (!attachment) {
+        if (!attachment || attachment.isDeleted) {
             throw new NotFoundError('Attachment');
         }
 
-        try {
-            await this.storageService.deleteObject(attachment.s3Key);
-        } catch (error) {
-            logger.error('MinIO deletion failed', { error, objectName: attachment.s3Key });
-        }
-
-        await this.prisma.attachment.delete({
+        // Soft delete the record in the database
+        await this.prisma.attachment.update({
             where: { id: attachmentId },
+            data: {
+                isDeleted: true,
+                deletedAt: new Date(),
+                // Optionally track who deleted it if you add a deletedById field to your schema
+            },
         });
+        
+        logger.info('Attachment soft-deleted', { attachmentId, userId, objectName: attachment.s3Key });
     }
 }
