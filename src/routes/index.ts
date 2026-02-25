@@ -17,6 +17,7 @@ import invitesRoutes from '../modules/invites/invites.routes';
 import accountTypesRoutes from '../modules/account-types/account-types.routes';
 import accountCategoriesRoutes from '../modules/account-categories/account-categories.routes';
 import accountsRoutes from '../modules/accounts/accounts.routes';
+import accountTransactionsRoutes from '../modules/account-transactions/account-transactions.routes';
 
 const router = Router();
 
@@ -31,6 +32,7 @@ router.use('/workspaces/:workspaceId/members', membersRoutes);
 router.use('/workspaces/:workspaceId/account-types', accountTypesRoutes);
 router.use('/workspaces/:workspaceId/account-categories', accountCategoriesRoutes);
 router.use('/workspaces/:workspaceId/accounts', accountsRoutes);
+router.use('/workspaces/:workspaceId/accounts/:accountId/transactions', accountTransactionsRoutes);
 router.use('/cashbooks', cashbooksRoutes);
 router.use('/entries', entriesRoutes);
 router.use('/categories', categoriesRoutes);

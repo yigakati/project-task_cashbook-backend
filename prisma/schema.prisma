@@ -496,7 +496,7 @@ model AccountTransaction {
   workspaceId       String                @map("workspace_id") @db.Uuid
   accountId         String                @map("account_id") @db.Uuid
   sourceType        TransactionSourceType @map("source_type")
-  sourceId          String                @map("source_id") @db.Uuid
+  sourceId          String?               @map("source_id") @db.Uuid
   type              EntryType // income / expense
   amount            Decimal               @db.Decimal(20, 4)
   description       String
@@ -504,7 +504,7 @@ model AccountTransaction {
   createdAt         DateTime              @default(now()) @map("created_at")
 
   account         Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  sourceEntry     Entry            @relation(fields: [sourceId], references: [id]) // Assuming CASHBOOK_ENTRY
+  sourceEntry     Entry?           @relation(fields: [sourceId], references: [id]) // Assuming CASHBOOK_ENTRY
   accountCategory AccountCategory? @relation(fields: [accountCategoryId], references: [id], onDelete: SetNull)
 
   @@unique([sourceId, accountId])
@@ -521,4 +521,5 @@ enum AccountClassification {
 
 enum TransactionSourceType {
   CASHBOOK_ENTRY
+  DIRECT
 }
