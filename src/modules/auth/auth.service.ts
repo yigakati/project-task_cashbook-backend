@@ -3,6 +3,8 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
+import { AuthProvider } from '@prisma/client';
 import { config } from '../../config';
 import { AuthRepository } from './auth.repository';
 import {
@@ -14,6 +16,7 @@ import { JwtPayload, AuditAction, WorkspaceType } from '../../core/types';
 import {
     RegisterDto, LoginDto, ChangePasswordDto,
     VerifyEmailDto, ForgotPasswordDto, ResetPasswordDto,
+    GoogleLoginDto,
 } from './auth.dto';
 import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
@@ -140,7 +143,9 @@ export class AuthService {
             );
         }
 
-        const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
+        const isPasswordValid = user.passwordHash
+            ? await bcrypt.compare(dto.password, user.passwordHash)
+            : false;
         if (!isPasswordValid) {
             await this.authRepository.createLoginHistory({
                 userId: user.id,
@@ -288,6 +293,10 @@ export class AuthService {
         const user = await this.authRepository.findUserById(userId);
         if (!user) {
             throw new AuthenticationError('User not found');
+        }
+
+        if (!user.passwordHash) {
+            throw new AppError('Password change is not available for Google-authenticated accounts', 400, 'NO_PASSWORD');
         }
 
         const isValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
@@ -499,5 +508,192 @@ export class AuthService {
     private safeCompare(a: string, b: string): boolean {
         if (a.length !== b.length) return false;
         return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    }
+
+    // ─── Google OAuth ────────────────────────────────────────
+    async googleLogin(dto: GoogleLoginDto, ipAddress?: string, userAgent?: string) {
+        const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
+
+        let payload;
+        try {
+            const ticket = await client.verifyIdToken({
+                idToken: dto.idToken,
+                audience: config.GOOGLE_CLIENT_ID,
+            });
+            payload = ticket.getPayload();
+        } catch (error) {
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.GOOGLE_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'Invalid Google ID token' } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Invalid Google ID token');
+        }
+
+        if (!payload || !payload.sub || !payload.email) {
+            throw new AuthenticationError('Invalid Google token payload');
+        }
+
+        if (!payload.email_verified) {
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.GOOGLE_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'Google email not verified', email: payload.email } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Your Google email is not verified');
+        }
+
+        const googleSub = payload.sub;
+        const email = payload.email;
+        const firstName = payload.given_name || payload.name?.split(' ')[0] || 'User';
+        const lastName = payload.family_name || payload.name?.split(' ').slice(1).join(' ') || '';
+
+        // Resolve user inside a transaction
+        const user = await this.prisma.$transaction(async (tx) => {
+            // Case A: Existing Google user
+            const existingGoogleUser = await tx.user.findUnique({
+                where: {
+                    provider_providerId: {
+                        provider: AuthProvider.GOOGLE,
+                        providerId: googleSub,
+                    },
+                },
+            });
+
+            if (existingGoogleUser) {
+                if (!existingGoogleUser.isActive) {
+                    throw new AuthenticationError('Account is deactivated');
+                }
+                return existingGoogleUser;
+            }
+
+            // Case B: Existing LOCAL user with same email
+            const existingLocalUser = await tx.user.findUnique({
+                where: { email },
+            });
+
+            if (existingLocalUser) {
+                if (!existingLocalUser.isActive) {
+                    throw new AuthenticationError('Account is deactivated');
+                }
+
+                if (!existingLocalUser.emailVerified) {
+                    throw new AppError(
+                        'A local account with this email exists but is not verified. Please verify your email first.',
+                        403,
+                        'EMAIL_NOT_VERIFIED'
+                    );
+                }
+
+                // Link Google to existing verified LOCAL account
+                const linked = await tx.user.update({
+                    where: { id: existingLocalUser.id },
+                    data: {
+                        provider: AuthProvider.GOOGLE,
+                        providerId: googleSub,
+                    },
+                });
+
+                await tx.auditLog.create({
+                    data: {
+                        userId: linked.id,
+                        action: AuditAction.GOOGLE_ACCOUNT_LINKED,
+                        resource: 'user',
+                        resourceId: linked.id,
+                        details: { googleSub } as any,
+                        ipAddress,
+                        userAgent,
+                    },
+                });
+
+                return linked;
+            }
+
+            // Case C: Brand new Google user
+            const newUser = await tx.user.create({
+                data: {
+                    email,
+                    firstName,
+                    lastName,
+                    provider: AuthProvider.GOOGLE,
+                    providerId: googleSub,
+                    emailVerified: true,
+                    isSuperAdmin: email === config.SUPER_ADMIN_EMAIL,
+                },
+            });
+
+            // Auto-create personal workspace
+            await tx.workspace.create({
+                data: {
+                    name: `${firstName}'s Personal`,
+                    type: WorkspaceType.PERSONAL,
+                    ownerId: newUser.id,
+                },
+            });
+
+            await tx.auditLog.create({
+                data: {
+                    userId: newUser.id,
+                    action: AuditAction.GOOGLE_ACCOUNT_CREATED,
+                    resource: 'user',
+                    resourceId: newUser.id,
+                    details: { googleSub, email } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+
+            return newUser;
+        });
+
+        // Resolve pending invites (fire-and-forget)
+        this.invitesService.resolveInvites(user.id, user.email)
+            .catch((err) => logger.error('Failed to resolve pending invites', { email: user.email, err }));
+
+        // Generate tokens (using existing token system)
+        const accessToken = this.generateAccessToken(user);
+        const { token: refreshToken, hash: refreshTokenHash } = this.generateRefreshToken();
+        const refreshExpiresAt = this.parseExpiryToDate(config.JWT_REFRESH_EXPIRY);
+
+        await this.authRepository.createRefreshToken({
+            userId: user.id,
+            tokenHash: refreshTokenHash,
+            deviceInfo: userAgent,
+            ipAddress,
+            expiresAt: refreshExpiresAt,
+        });
+
+        await this.authRepository.updateUserLastLogin(user.id);
+        await this.authRepository.createLoginHistory({
+            userId: user.id,
+            ipAddress,
+            userAgent,
+            status: 'SUCCESS',
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                userId: user.id,
+                action: AuditAction.GOOGLE_LOGIN_SUCCESS,
+                resource: 'auth',
+                ipAddress,
+                userAgent,
+            },
+        });
+
+        const { passwordHash: _, ...userWithoutPassword } = user;
+        return {
+            user: userWithoutPassword,
+            accessToken,
+            refreshToken,
+        };
     }
 }

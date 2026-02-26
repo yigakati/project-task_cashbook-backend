@@ -12,6 +12,7 @@ import {
     resendVerificationSchema,
     forgotPasswordSchema,
     resetPasswordSchema,
+    googleLoginSchema,
 } from './auth.dto';
 
 const router = Router();
@@ -36,6 +37,14 @@ router.post(
     '/refresh',
     authRateLimiter,
     authController.refresh.bind(authController) as any
+);
+
+// Google OAuth
+router.post(
+    '/google',
+    authRateLimiter,
+    validate(googleLoginSchema),
+    authController.googleLogin.bind(authController) as any
 );
 
 // Email verification

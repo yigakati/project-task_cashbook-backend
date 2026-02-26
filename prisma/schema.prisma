@@ -10,17 +10,19 @@ datasource db {
 // ─── User ──────────────────────────────────────────────
 
 model User {
-  id            String    @id @default(uuid()) @db.Uuid
-  email         String    @unique
-  passwordHash  String    @map("password_hash")
-  firstName     String    @map("first_name")
-  lastName      String    @map("last_name")
-  isActive      Boolean   @default(true) @map("is_active")
-  isSuperAdmin  Boolean   @default(false) @map("is_super_admin")
-  emailVerified Boolean   @default(false) @map("email_verified")
-  lastLoginAt   DateTime? @map("last_login_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  id            String       @id @default(uuid()) @db.Uuid
+  email         String       @unique
+  passwordHash  String?      @map("password_hash")
+  firstName     String       @map("first_name")
+  lastName      String       @map("last_name")
+  provider      AuthProvider @default(LOCAL)
+  providerId    String?      @map("provider_id")
+  isActive      Boolean      @default(true) @map("is_active")
+  isSuperAdmin  Boolean      @default(false) @map("is_super_admin")
+  emailVerified Boolean      @default(false) @map("email_verified")
+  lastLoginAt   DateTime?    @map("last_login_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
 
   refreshTokens        RefreshToken[]
   loginHistory         LoginHistory[]
@@ -35,6 +37,7 @@ model User {
   financialAuditLogs   FinancialAuditLog[]
   sentInvites          PendingInvite[]     @relation("InviteSender")
 
+  @@unique([provider, providerId])
   @@map("users")
 }
 
@@ -522,4 +525,9 @@ enum AccountClassification {
 enum TransactionSourceType {
   CASHBOOK_ENTRY
   DIRECT
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
 }

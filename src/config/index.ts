@@ -47,6 +47,8 @@ const envSchema = z.object({
     LOG_DIR: z.string().default('logs'),
 
     SUPER_ADMIN_EMAIL: z.string().email().default('admin@cashbook.com'),
+
+    GOOGLE_CLIENT_ID: z.string().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);

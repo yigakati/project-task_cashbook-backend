@@ -210,6 +210,29 @@ export class AuthController {
             next(error);
         }
     }
+
+    // ─── Google OAuth ───────────────────────────────────
+    async googleLogin(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.authService.googleLogin(
+                req.body,
+                req.ip,
+                req.get('user-agent')
+            );
+
+            setAuthCookies(res, result.accessToken, result.refreshToken);
+
+            const response: ApiResponse = {
+                success: true,
+                message: 'Google login successful',
+                data: { user: result.user },
+            };
+
+            res.status(StatusCodes.OK).json(response);
+        } catch (error) {
+            next(error);
+        }
+    }
 }
 
 // ─── Cookie Helpers ────────────────────────────────────

@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient, Prisma, AuthProvider } from '@prisma/client';
 
 @injectable()
 export class AuthRepository {
@@ -113,6 +113,25 @@ export class AuthRepository {
                 userId,
                 status: 'FAILED',
                 createdAt: { gte: since },
+            },
+        });
+    }
+
+    // ─── Google OAuth ─────────────────────────────────
+    async findUserByProviderId(provider: AuthProvider, providerId: string) {
+        return this.prisma.user.findUnique({
+            where: {
+                provider_providerId: { provider, providerId },
+            },
+        });
+    }
+
+    async linkGoogleAccount(userId: string, providerId: string) {
+        return this.prisma.user.update({
+            where: { id: userId },
+            data: {
+                provider: AuthProvider.GOOGLE,
+                providerId,
             },
         });
     }

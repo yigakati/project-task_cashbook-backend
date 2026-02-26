@@ -58,6 +58,10 @@ export const resetPasswordSchema = z.object({
         .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character'),
 });
 
+export const googleLoginSchema = z.object({
+    idToken: z.string().min(1, 'Google ID token is required'),
+});
+
 export type RegisterDto = z.infer<typeof registerSchema>;
 export type LoginDto = z.infer<typeof loginSchema>;
 export type ChangePasswordDto = z.infer<typeof changePasswordSchema>;
@@ -65,3 +69,4 @@ export type VerifyEmailDto = z.infer<typeof verifyEmailSchema>;
 export type ResendVerificationDto = z.infer<typeof resendVerificationSchema>;
 export type ForgotPasswordDto = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordDto = z.infer<typeof resetPasswordSchema>;
+export type GoogleLoginDto = z.infer<typeof googleLoginSchema>;
