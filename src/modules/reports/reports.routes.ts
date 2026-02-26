@@ -29,17 +29,17 @@ router.get(
 );
 
 // Queue async report generation (emailed when done)
-router.post(
-    '/:cashbookId/queue',
-    requireCashbookMember(CashbookPermission.GENERATE_REPORT) as any,
-    validate(reportQuerySchema, 'query'),
-    reportsController.queueReport.bind(reportsController) as any
-);
+// router.post(
+//     '/:cashbookId/queue',
+//     requireCashbookMember(CashbookPermission.GENERATE_REPORT) as any,
+//     validate(reportQuerySchema, 'query'),
+//     reportsController.queueReport.bind(reportsController) as any
+// );
 
 // Check async report job status
-router.get(
-    '/jobs/:jobId/status',
-    reportsController.jobStatus.bind(reportsController) as any
-);
+// router.get(
+//     '/jobs/:jobId/status',
+//     reportsController.jobStatus.bind(reportsController) as any
+// );
 
 export default router;

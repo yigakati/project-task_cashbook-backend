@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import healthRoutes from './health.routes';
 import authRoutes from '../modules/auth/auth.routes';
 import usersRoutes from '../modules/users/users.routes';
 import workspacesRoutes from '../modules/workspaces/workspaces.routes';
@@ -20,9 +19,6 @@ import accountsRoutes from '../modules/accounts/accounts.routes';
 import accountTransactionsRoutes from '../modules/account-transactions/account-transactions.routes';
 
 const router = Router();
-
-// Health checks (no prefix)
-router.use(healthRoutes);
 
 // API v1 routes
 router.use('/auth', authRoutes);

@@ -43,7 +43,7 @@
     "http-status-codes": "^2.3.0",
     "ioredis": "^5.9.3",
     "jsonwebtoken": "^9.0.3",
-    "minio": "^8.0.6",
+    "minio": "^7.0.26",
     "multer": "^2.0.2",
     "nodemailer": "^8.0.1",
     "pdfkit": "^0.17.2",

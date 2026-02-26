@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import routes from './routes';
+import healthRoutes from './routes/health.routes';
 import { errorHandler } from './middlewares/errorHandler';
 import { requestLogger } from './middlewares/requestLogger';
 import { globalRateLimiter } from './middlewares/rateLimiter';
@@ -30,10 +31,11 @@ app.use(cookieParser());
 
 // ─── Global Middleware ─────────────────────────────────
 app.use(requestLogger);
-app.use(globalRateLimiter);
+// ─── Health Routes (NO rate limit) ───
+app.use('/api/v1', healthRoutes);
 
-// ─── Routes ────────────────────────────────────────────
-app.use('/api/v1', routes);
+// ─── Other API Routes ───
+app.use('/api/v1', globalRateLimiter, routes);
 
 // ─── 404 Handler ───────────────────────────────────────
 app.use((req, res) => {
