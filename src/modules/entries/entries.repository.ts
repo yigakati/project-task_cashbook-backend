@@ -15,6 +15,17 @@ export class EntriesRepository {
                     select: { id: true, email: true, firstName: true, lastName: true },
                 },
                 attachments: true,
+                accountTransactions: {
+                    select: {
+                        account: {
+                            select: {
+                                id: true,
+                                name: true,
+                                accountType: { select: { id: true, name: true } }
+                            }
+                        }
+                    }
+                },
             },
         });
     }
@@ -72,6 +83,17 @@ export class EntriesRepository {
                         select: { id: true, email: true, firstName: true, lastName: true },
                     },
                     _count: { select: { attachments: true } },
+                    accountTransactions: {
+                        select: {
+                            account: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    accountType: { select: { id: true, name: true } }
+                                }
+                            }
+                        }
+                    },
                 },
                 skip: (page - 1) * limit,
                 take: limit,

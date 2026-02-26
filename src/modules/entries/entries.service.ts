@@ -47,8 +47,16 @@ export class EntriesService {
 
         const totalPages = Math.ceil(total / query.limit);
 
+        const mappedEntries = entries.map(entry => {
+            const { accountTransactions, ...rest } = entry as any;
+            return {
+                ...rest,
+                account: accountTransactions?.[0]?.account || null,
+            };
+        });
+
         return {
-            data: entries,
+            data: mappedEntries,
             pagination: {
                 page: query.page,
                 limit: query.limit,
@@ -66,7 +74,11 @@ export class EntriesService {
         if (!entry || entry.isDeleted) {
             throw new NotFoundError('Entry');
         }
-        return entry;
+        const { accountTransactions, ...rest } = entry as any;
+        return {
+            ...rest,
+            account: accountTransactions?.[0]?.account || null,
+        };
     }
 
     // ─── Create Entry ─────────────────────────────────
