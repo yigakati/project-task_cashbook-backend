@@ -38,6 +38,10 @@ export enum CashbookPermission {
     UPLOAD_ATTACHMENT = 'UPLOAD_ATTACHMENT',
     DELETE_ATTACHMENT = 'DELETE_ATTACHMENT',
 
+    // Obligations
+    VIEW_OBLIGATIONS = 'VIEW_OBLIGATIONS',
+    MANAGE_OBLIGATIONS = 'MANAGE_OBLIGATIONS',
+
     // Reports
     GENERATE_REPORT = 'GENERATE_REPORT',
 
@@ -71,6 +75,8 @@ export const CASHBOOK_PERMISSION_MATRIX: Record<CashbookRole, Set<CashbookPermis
         CashbookPermission.VIEW_ATTACHMENTS,
         CashbookPermission.UPLOAD_ATTACHMENT,
         CashbookPermission.DELETE_ATTACHMENT,
+        CashbookPermission.VIEW_OBLIGATIONS,
+        CashbookPermission.MANAGE_OBLIGATIONS,
         CashbookPermission.GENERATE_REPORT,
         CashbookPermission.VIEW_AUDIT_LOG,
     ]),
@@ -93,6 +99,8 @@ export const CASHBOOK_PERMISSION_MATRIX: Record<CashbookRole, Set<CashbookPermis
         CashbookPermission.VIEW_ATTACHMENTS,
         CashbookPermission.UPLOAD_ATTACHMENT,
         CashbookPermission.DELETE_ATTACHMENT,
+        CashbookPermission.VIEW_OBLIGATIONS,
+        CashbookPermission.MANAGE_OBLIGATIONS,
         CashbookPermission.GENERATE_REPORT,
         CashbookPermission.VIEW_AUDIT_LOG,
     ]),
@@ -108,6 +116,7 @@ export const CASHBOOK_PERMISSION_MATRIX: Record<CashbookRole, Set<CashbookPermis
         CashbookPermission.VIEW_PAYMENT_MODES,
         CashbookPermission.VIEW_ATTACHMENTS,
         CashbookPermission.UPLOAD_ATTACHMENT,
+        CashbookPermission.VIEW_OBLIGATIONS,
         CashbookPermission.GENERATE_REPORT,
     ]),
 
@@ -119,6 +128,7 @@ export const CASHBOOK_PERMISSION_MATRIX: Record<CashbookRole, Set<CashbookPermis
         CashbookPermission.VIEW_CONTACTS,
         CashbookPermission.VIEW_PAYMENT_MODES,
         CashbookPermission.VIEW_ATTACHMENTS,
+        CashbookPermission.VIEW_OBLIGATIONS,
         CashbookPermission.GENERATE_REPORT,
     ]),
 };

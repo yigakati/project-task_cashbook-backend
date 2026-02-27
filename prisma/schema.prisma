@@ -87,12 +87,13 @@ model Workspace {
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
 
-  owner              User                @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  owner              User                 @relation("WorkspaceOwner", fields: [ownerId], references: [id])
   members            WorkspaceMember[]
   cashbooks          Cashbook[]
   categories         Category[]
   contacts           Contact[]
   paymentModes       PaymentMode[]
+  obligations        CashbookObligation[]
   auditLogs          AuditLog[]
   financialAuditLogs FinancialAuditLog[]
   pendingInvites     PendingInvite[]
@@ -138,9 +139,10 @@ model Cashbook {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   members     CashbookMember[]
   entries     Entry[]
+  obligations CashbookObligation[]
   attachments Attachment[]
 
   @@index([workspaceId])
@@ -175,6 +177,7 @@ model Entry {
   categoryId    String?   @map("category_id") @db.Uuid
   contactId     String?   @map("contact_id") @db.Uuid
   paymentModeId String?   @map("payment_mode_id") @db.Uuid
+  obligationId  String?   @map("obligation_id") @db.Uuid
   entryDate     DateTime  @map("entry_date")
   createdById   String    @map("created_by_id") @db.Uuid
   isDeleted     Boolean   @default(false) @map("is_deleted")
@@ -189,6 +192,7 @@ model Entry {
   category            Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   contact             Contact?             @relation(fields: [contactId], references: [id], onDelete: SetNull)
   paymentMode         PaymentMode?         @relation(fields: [paymentModeId], references: [id], onDelete: SetNull)
+  obligation          CashbookObligation?  @relation(fields: [obligationId], references: [id], onDelete: SetNull)
   createdBy           User                 @relation(fields: [createdById], references: [id])
   audits              EntryAudit[]
   deleteRequests      DeleteRequest[]
@@ -248,6 +252,46 @@ model DeleteRequest {
 }
 
 // ─── Category ──────────────────────────────────────────
+
+// ─── Obligations ───────────────────────────────────────
+
+enum ObligationType {
+  RECEIVABLE
+  PAYABLE
+}
+
+enum ObligationStatus {
+  OPEN
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+model CashbookObligation {
+  id                String           @id @default(uuid()) @db.Uuid
+  workspaceId       String           @map("workspace_id") @db.Uuid
+  cashbookId        String           @map("cashbook_id") @db.Uuid
+  type              ObligationType
+  title             String
+  description       String?
+  totalAmount       Decimal          @map("total_amount") @db.Decimal(20, 4)
+  outstandingAmount Decimal          @map("outstanding_amount") @db.Decimal(20, 4)
+  status            ObligationStatus @default(OPEN)
+  dueDate           DateTime?        @map("due_date")
+  archivedAt        DateTime?        @map("archived_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  cashbook  Cashbook  @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
+  entries   Entry[]
+
+  @@index([workspaceId])
+  @@index([cashbookId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("cashbook_obligations")
+}
 
 model Category {
   id          String   @id @default(uuid()) @db.Uuid

@@ -7,7 +7,7 @@ on:
 
 env:
   # Using the secret directly here ensures consistency
-  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/cashbook-app
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/inchange_server
 
 jobs:
   build-and-push:
@@ -58,7 +58,7 @@ jobs:
 
             # 1. Update the Deployment to use the new image SHA
             # K3s will see the new hash and automatically pull it (because of imagePullPolicy: Always)
-            kubectl set image deployment/cashbook-app \
+            kubectl set image deployment/inchange_server \
               cashbook-api=${{ env.IMAGE_NAME }}:${{ github.sha }} \
               -n tast-project-cashbook-app
 
@@ -67,5 +67,5 @@ jobs:
             
             # 3. Wait for rollout to finish
             # If the app crashes (or DB push fails), this times out and fails the GitHub Action
-            kubectl rollout status deployment/cashbook-app \
+            kubectl rollout status deployment/inchange_server \
               -n tast-project-cashbook-app --timeout=120s

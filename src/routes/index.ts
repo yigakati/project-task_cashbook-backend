@@ -13,6 +13,7 @@ import reportsRoutes from '../modules/reports/reports.routes';
 import auditRoutes from '../modules/audit/audit.routes';
 import adminRoutes from '../modules/admin/admin.routes';
 import invitesRoutes from '../modules/invites/invites.routes';
+import { obligationsRouter } from '../modules/cashbook-obligations/obligations.routes';
 import accountTypesRoutes from '../modules/account-types/account-types.routes';
 import accountCategoriesRoutes from '../modules/account-categories/account-categories.routes';
 import accountsRoutes from '../modules/accounts/accounts.routes';
@@ -30,6 +31,7 @@ router.use('/workspaces/:workspaceId/account-categories', accountCategoriesRoute
 router.use('/workspaces/:workspaceId/accounts', accountsRoutes);
 router.use('/workspaces/:workspaceId/accounts/:accountId/transactions', accountTransactionsRoutes);
 router.use('/cashbooks', cashbooksRoutes);
+router.use('/cashbooks/:cashbookId/obligations', obligationsRouter);
 router.use('/entries', entriesRoutes);
 router.use('/categories', categoriesRoutes);
 router.use('/contacts', contactsRoutes);
