@@ -20,19 +20,17 @@ export class ObligationsService {
     // ─── List Obligations ──────────────────────────────
     async getObligations(cashbookId: string, query: ObligationQueryDto) {
         const { obligations, total } = await this.obligationsRepo.findByCashbookId(cashbookId, query);
-        const limit = query.limit || 20;
-        const page = query.page || 1;
-        const totalPages = Math.ceil(total / limit);
+        const totalPages = Math.ceil(total / query.limit);
 
         return {
             data: obligations,
             pagination: {
-                page,
-                limit,
+                page: query.page,
+                limit: query.limit,
                 total,
                 totalPages,
-                hasNext: page < totalPages,
-                hasPrevious: page > 1,
+                hasNext: query.page < totalPages,
+                hasPrevious: query.page > 1,
             }
         };
     }

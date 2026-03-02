@@ -33,8 +33,8 @@ export class ObligationsRepository {
         sortOrder?: string;
         includeArchived?: boolean;
     }) {
-        const page = params.page || 1;
-        const limit = params.limit || 20;
+        const page = Number(params.page) || 1;
+        const limit = Number(params.limit) || 20;
         const sortBy = params.sortBy || 'createdAt';
         const sortOrder = params.sortOrder || 'desc';
 

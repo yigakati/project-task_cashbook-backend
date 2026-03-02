@@ -26,13 +26,13 @@ export const updateObligationSchema = z.object({
 });
 
 export const obligationQuerySchema = z.object({
-    page: z.string().regex(/^\d+$/).transform(Number).optional(),
-    limit: z.string().regex(/^\d+$/).transform(Number).optional(),
+    page: z.coerce.number().min(1).default(1),
+    limit: z.coerce.number().min(1).max(100).default(20),
     type: z.nativeEnum(ObligationType).optional(),
     status: z.nativeEnum(ObligationStatus).optional(),
     isOverdue: z.enum(['true', 'false']).transform(val => val === 'true').optional(),
-    sortBy: z.enum(['createdAt', 'dueDate', 'totalAmount', 'outstandingAmount']).optional(),
-    sortOrder: z.enum(['asc', 'desc']).optional(),
+    sortBy: z.enum(['createdAt', 'dueDate', 'totalAmount', 'outstandingAmount']).default('createdAt'),
+    sortOrder: z.enum(['asc', 'desc']).default('desc'),
     includeArchived: z.enum(['true', 'false']).transform(val => val === 'true').optional(),
 });
 
