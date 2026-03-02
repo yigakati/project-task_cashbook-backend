@@ -1,11 +1,16 @@
 import { z } from 'zod';
 import { ObligationType, ObligationStatus } from '@prisma/client';
 
+const decimalString = z.string().regex(
+    /^\d+(\.\d{1,4})?$/,
+    'Amount must be a valid decimal number with up to 4 decimal places'
+);
+
 export const createObligationSchema = z.object({
     type: z.nativeEnum(ObligationType).refine((val) => val !== undefined, { message: 'Invalid obligation type' }),
     title: z.string().min(1, 'Title is required').max(200, 'Title is too long'),
     description: z.string().max(1000, 'Description is too long').optional(),
-    totalAmount: z.number().positive('Total amount must be greater than zero'),
+    totalAmount: decimalString,
     dueDate: z.string()
         .refine((val) => !isNaN(Date.parse(val)), { message: 'Invalid date format' })
         .optional(),

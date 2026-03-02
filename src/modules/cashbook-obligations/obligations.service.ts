@@ -7,8 +7,7 @@ import {
     ObligationQueryDto,
 } from './obligations.dto';
 import { NotFoundError, AppError } from '../../core/errors/AppError';
-import { AuditAction, CashbookRole } from '../../core/types';
-import { CashbookPermission, hasPermission } from '../../core/types/permissions';
+import { AuditAction } from '../../core/types';
 import { Decimal } from '@prisma/client/runtime/library';
 
 @injectable()
@@ -18,42 +17,41 @@ export class ObligationsService {
         @inject('PrismaClient') private prisma: PrismaClient,
     ) { }
 
-    async getObligations(cashbookId: string, query: ObligationQueryDto, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.VIEW_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to view obligations', 403, 'AUTHORIZATION_ERROR');
-        }
-
+    // ─── List Obligations ──────────────────────────────
+    async getObligations(cashbookId: string, query: ObligationQueryDto) {
         const { obligations, total } = await this.obligationsRepo.findByCashbookId(cashbookId, query);
-        const totalPages = Math.ceil(total / (query.limit || 20));
+        const limit = query.limit || 20;
+        const page = query.page || 1;
+        const totalPages = Math.ceil(total / limit);
 
         return {
             data: obligations,
             pagination: {
-                page: query.page || 1,
-                limit: query.limit || 20,
+                page,
+                limit,
                 total,
                 totalPages,
-                hasNext: (query.page || 1) < totalPages,
-                hasPrevious: (query.page || 1) > 1,
+                hasNext: page < totalPages,
+                hasPrevious: page > 1,
             }
         };
     }
 
-    async getObligation(id: string, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.VIEW_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to view obligations', 403, 'AUTHORIZATION_ERROR');
-        }
-
+    // ─── Get Single Obligation ─────────────────────────
+    async getObligation(id: string, cashbookId: string) {
         const obligation = await this.obligationsRepo.findById(id);
         if (!obligation) throw new NotFoundError('Obligation');
+
+        // Verify obligation belongs to the cashbook the user has access to
+        if (obligation.cashbookId !== cashbookId) {
+            throw new NotFoundError('Obligation');
+        }
+
         return obligation;
     }
 
-    async createObligation(cashbookId: string, userId: string, dto: CreateObligationDto, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.MANAGE_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to manage obligations', 403, 'AUTHORIZATION_ERROR');
-        }
-
+    // ─── Create Obligation ─────────────────────────────
+    async createObligation(cashbookId: string, userId: string, dto: CreateObligationDto) {
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: cashbookId },
             select: { workspaceId: true, isActive: true }
@@ -63,6 +61,8 @@ export class ObligationsService {
             throw new NotFoundError('Cashbook');
         }
 
+        const amount = new Decimal(dto.totalAmount);
+
         const obligation = await this.prisma.$transaction(async (tx) => {
             const newObligation = await tx.cashbookObligation.create({
                 data: {
@@ -71,8 +71,8 @@ export class ObligationsService {
                     type: dto.type as any,
                     title: dto.title,
                     description: dto.description || null,
-                    totalAmount: new Decimal(dto.totalAmount),
-                    outstandingAmount: new Decimal(dto.totalAmount), // Initialize to total amount
+                    totalAmount: amount,
+                    outstandingAmount: amount, // Initialize to total amount
                     status: ObligationStatus.OPEN,
                     dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
                 }
@@ -99,13 +99,15 @@ export class ObligationsService {
         return obligation;
     }
 
-    async updateObligation(id: string, userId: string, dto: UpdateObligationDto, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.MANAGE_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to manage obligations', 403, 'AUTHORIZATION_ERROR');
-        }
-
+    // ─── Update Obligation ─────────────────────────────
+    async updateObligation(id: string, cashbookId: string, userId: string, dto: UpdateObligationDto) {
         const existing = await this.obligationsRepo.findById(id);
         if (!existing || existing.archivedAt) {
+            throw new NotFoundError('Obligation');
+        }
+
+        // Verify obligation belongs to the cashbook the user has access to
+        if (existing.cashbookId !== cashbookId) {
             throw new NotFoundError('Obligation');
         }
 
@@ -136,13 +138,15 @@ export class ObligationsService {
         return updated;
     }
 
-    async archiveObligation(id: string, userId: string, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.MANAGE_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to manage obligations', 403, 'AUTHORIZATION_ERROR');
-        }
-
+    // ─── Archive Obligation ────────────────────────────
+    async archiveObligation(id: string, cashbookId: string, userId: string) {
         const existing = await this.obligationsRepo.findById(id);
         if (!existing) {
+            throw new NotFoundError('Obligation');
+        }
+
+        // Verify obligation belongs to the cashbook the user has access to
+        if (existing.cashbookId !== cashbookId) {
             throw new NotFoundError('Obligation');
         }
 
@@ -179,10 +183,7 @@ export class ObligationsService {
 
     // ─── Reporting ──────────────────────────────────────────
 
-    async getOutstandingReceivables(cashbookId: string, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.VIEW_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to view obligations', 403, 'AUTHORIZATION_ERROR');
-        }
+    async getOutstandingReceivables(cashbookId: string) {
         const aggregations = await this.prisma.cashbookObligation.aggregate({
             where: {
                 cashbookId,
@@ -199,10 +200,7 @@ export class ObligationsService {
         };
     }
 
-    async getOutstandingPayables(cashbookId: string, userRole: CashbookRole) {
-        if (!hasPermission(userRole, CashbookPermission.VIEW_OBLIGATIONS)) {
-            throw new AppError('You do not have permission to view obligations', 403, 'AUTHORIZATION_ERROR');
-        }
+    async getOutstandingPayables(cashbookId: string) {
         const aggregations = await this.prisma.cashbookObligation.aggregate({
             where: {
                 cashbookId,

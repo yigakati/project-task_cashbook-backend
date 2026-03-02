@@ -135,6 +135,10 @@ export class EntriesService {
                 throw new AppError('Obligation does not belong to this cashbook', 400, 'INVALID_OBLIGATION');
             }
 
+            if (obligation.archivedAt) {
+                throw new AppError('Cannot apply payment to an archived obligation', 400, 'OBLIGATION_ARCHIVED');
+            }
+
             if (obligation.status === ObligationStatus.PAID || obligation.status === ObligationStatus.CANCELLED) {
                 throw new AppError(`Cannot apply payment to an obligation that is ${obligation.status.toLowerCase()}`, 400, 'INVALID_OBLIGATION_STATUS');
             }
@@ -448,105 +452,6 @@ export class EntriesService {
 
                 const targetAccountId = dto.accountId !== undefined ? dto.accountId : existingTx?.accountId;
 
-                // Deal with Obligations
-                if (entry.obligationId || dto.obligationId) {
-                    const targetObligId = dto.obligationId !== undefined ? dto.obligationId : entry.obligationId;
-
-                    // If moving away from an obligation, reverse it
-                    if (entry.obligationId && dto.obligationId === null) {
-                        await tx.$queryRaw`SELECT id FROM cashbook_obligations WHERE id = ${entry.obligationId}::uuid FOR UPDATE`;
-                        const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId } });
-
-                        const newOutstanding = oldOblig.outstandingAmount.add(oldAmount);
-                        let newStatus = oldOblig.status;
-                        if (newOutstanding.equals(oldOblig.totalAmount)) {
-                            newStatus = ObligationStatus.OPEN;
-                        } else if (newOutstanding.greaterThan(0) && newOutstanding.lessThan(oldOblig.totalAmount)) {
-                            newStatus = ObligationStatus.PARTIAL;
-                        }
-
-                        await tx.cashbookObligation.update({
-                            where: { id: entry.obligationId },
-                            data: { outstandingAmount: newOutstanding, status: newStatus }
-                        });
-                    } else if (targetObligId) {
-                        // Lock target obligation
-                        await tx.$queryRaw`SELECT id FROM cashbook_obligations WHERE id = ${targetObligId}::uuid FOR UPDATE`;
-                        const lockedTarget = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: targetObligId } });
-
-                        // Did the obligation change?
-                        const changedObligation = entry.obligationId && entry.obligationId !== targetObligId;
-
-                        if (changedObligation) {
-                            // Reverse old one
-                            await tx.$queryRaw`SELECT id FROM cashbook_obligations WHERE id = ${entry.obligationId}::uuid FOR UPDATE`;
-                            const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId as string } });
-                            const revOutstanding = oldOblig.outstandingAmount.add(oldAmount);
-                            let revStatus = oldOblig.status;
-                            if (revOutstanding.equals(oldOblig.totalAmount)) revStatus = ObligationStatus.OPEN;
-                            else if (revOutstanding.greaterThan(0) && revOutstanding.lessThan(oldOblig.totalAmount)) revStatus = ObligationStatus.PARTIAL;
-
-                            await tx.cashbookObligation.update({
-                                where: { id: entry.obligationId as string },
-                                data: { outstandingAmount: revOutstanding, status: revStatus }
-                            });
-                        }
-
-                        // Calculate adjustment to target
-                        // If target was the original, we add back the old amount, then subtract the new. 
-                        // Effectively: net change = oldAmount - newAmount
-                        // If target is new, we just subtract newAmount (since old was handled above or didn't exist)
-                        const adjustment = !changedObligation && entry.obligationId ? oldAmount.sub(newAmount) : newAmount.negated();
-
-                        const provisionalOutstanding = lockedTarget.outstandingAmount.add(adjustment);
-
-                        if (provisionalOutstanding.lessThan(0)) {
-                            throw new AppError(`Update would overpay the obligation`, 400, 'OVERPAYMENT');
-                        }
-
-                        // Check directions
-                        if (lockedTarget.type === ObligationType.RECEIVABLE && newType !== EntryType.INCOME) {
-                            throw new AppError('Receivables must be settled with INCOME entries', 400, 'DIRECTION_MISMATCH');
-                        }
-                        if (lockedTarget.type === ObligationType.PAYABLE && newType !== EntryType.EXPENSE) {
-                            throw new AppError('Payables must be settled with EXPENSE entries', 400, 'DIRECTION_MISMATCH');
-                        }
-
-                        let newStatus = lockedTarget.status;
-                        if (provisionalOutstanding.equals(0)) {
-                            newStatus = ObligationStatus.PAID;
-                        } else if (provisionalOutstanding.greaterThan(0) && provisionalOutstanding.lessThan(lockedTarget.totalAmount)) {
-                            newStatus = ObligationStatus.PARTIAL;
-                        } else if (provisionalOutstanding.equals(lockedTarget.totalAmount)) {
-                            newStatus = ObligationStatus.OPEN;
-                        }
-
-                        await tx.cashbookObligation.update({
-                            where: { id: targetObligId },
-                            data: {
-                                outstandingAmount: provisionalOutstanding,
-                                status: newStatus
-                            }
-                        });
-
-                        // Audit (simplistic audit for now, maybe omit detailed breakdown for brevity)
-                        await tx.auditLog.create({
-                            data: {
-                                userId,
-                                workspaceId: cashbook.workspaceId,
-                                action: AuditAction.OBLIGATION_UPDATED,
-                                resource: 'obligation',
-                                resourceId: targetObligId,
-                                details: {
-                                    entryId,
-                                    adjustedAmount: adjustment,
-                                    newOutstanding: provisionalOutstanding,
-                                } as any
-                            }
-                        });
-                    }
-                }
-
                 if (targetAccountId) {
                     const needsApply = hasAccountChanged || oldAmount.toString() !== newAmount.toString() || wasIncome !== isIncome;
 
@@ -609,6 +514,129 @@ export class EntriesService {
                 }
             }
 
+            // Deal with Obligations (independent of account logic)
+            if (entry.obligationId || dto.obligationId) {
+                const targetObligId = dto.obligationId !== undefined ? dto.obligationId : entry.obligationId;
+
+                // If moving away from an obligation, reverse it
+                if (entry.obligationId && dto.obligationId === null) {
+                    await tx.$queryRaw`SELECT id FROM cashbook_obligations WHERE id = ${entry.obligationId}::uuid FOR UPDATE`;
+                    const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId } });
+
+                    const newOutstanding = oldOblig.outstandingAmount.add(oldAmount);
+                    // Cap to totalAmount to prevent exceeding bounds
+                    const cappedOutstanding = newOutstanding.greaterThan(oldOblig.totalAmount)
+                        ? oldOblig.totalAmount
+                        : newOutstanding;
+                    let newStatus = oldOblig.status;
+                    if (cappedOutstanding.equals(oldOblig.totalAmount)) {
+                        newStatus = ObligationStatus.OPEN;
+                    } else if (cappedOutstanding.greaterThan(0) && cappedOutstanding.lessThan(oldOblig.totalAmount)) {
+                        newStatus = ObligationStatus.PARTIAL;
+                    }
+
+                    await tx.cashbookObligation.update({
+                        where: { id: entry.obligationId },
+                        data: { outstandingAmount: cappedOutstanding, status: newStatus }
+                    });
+                } else if (targetObligId) {
+                    // Lock target obligation
+                    await tx.$queryRaw`SELECT id FROM cashbook_obligations WHERE id = ${targetObligId}::uuid FOR UPDATE`;
+                    const lockedTarget = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: targetObligId } });
+
+                    // Pre-validation for new or changed obligation assignment
+                    const changedObligation = entry.obligationId && entry.obligationId !== targetObligId;
+                    const isNewAssignment = !entry.obligationId || changedObligation;
+
+                    if (isNewAssignment) {
+                        // Validate the target obligation
+                        if (lockedTarget.cashbookId !== entry.cashbookId) {
+                            throw new AppError('Obligation does not belong to this cashbook', 400, 'INVALID_OBLIGATION');
+                        }
+
+                        if (lockedTarget.archivedAt) {
+                            throw new AppError('Cannot apply payment to an archived obligation', 400, 'OBLIGATION_ARCHIVED');
+                        }
+
+                        if (lockedTarget.status === ObligationStatus.CANCELLED) {
+                            throw new AppError('Cannot apply payment to a cancelled obligation', 400, 'INVALID_OBLIGATION_STATUS');
+                        }
+                    }
+
+                    if (changedObligation) {
+                        // Reverse old one
+                        await tx.$queryRaw`SELECT id FROM cashbook_obligations WHERE id = ${entry.obligationId}::uuid FOR UPDATE`;
+                        const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId as string } });
+                        const revOutstanding = oldOblig.outstandingAmount.add(oldAmount);
+                        // Cap to totalAmount
+                        const cappedRevOutstanding = revOutstanding.greaterThan(oldOblig.totalAmount)
+                            ? oldOblig.totalAmount
+                            : revOutstanding;
+                        let revStatus = oldOblig.status;
+                        if (cappedRevOutstanding.equals(oldOblig.totalAmount)) revStatus = ObligationStatus.OPEN;
+                        else if (cappedRevOutstanding.greaterThan(0) && cappedRevOutstanding.lessThan(oldOblig.totalAmount)) revStatus = ObligationStatus.PARTIAL;
+
+                        await tx.cashbookObligation.update({
+                            where: { id: entry.obligationId as string },
+                            data: { outstandingAmount: cappedRevOutstanding, status: revStatus }
+                        });
+                    }
+
+                    // Calculate adjustment to target
+                    // If target was the original, we add back the old amount, then subtract the new. 
+                    // Effectively: net change = oldAmount - newAmount
+                    // If target is new, we just subtract newAmount (since old was handled above or didn't exist)
+                    const adjustment = !changedObligation && entry.obligationId ? oldAmount.sub(newAmount) : newAmount.negated();
+
+                    const provisionalOutstanding = lockedTarget.outstandingAmount.add(adjustment);
+
+                    if (provisionalOutstanding.lessThan(0)) {
+                        throw new AppError(`Update would overpay the obligation`, 400, 'OVERPAYMENT');
+                    }
+
+                    // Check directions
+                    if (lockedTarget.type === ObligationType.RECEIVABLE && newType !== EntryType.INCOME) {
+                        throw new AppError('Receivables must be settled with INCOME entries', 400, 'DIRECTION_MISMATCH');
+                    }
+                    if (lockedTarget.type === ObligationType.PAYABLE && newType !== EntryType.EXPENSE) {
+                        throw new AppError('Payables must be settled with EXPENSE entries', 400, 'DIRECTION_MISMATCH');
+                    }
+
+                    let newStatus = lockedTarget.status;
+                    if (provisionalOutstanding.equals(0)) {
+                        newStatus = ObligationStatus.PAID;
+                    } else if (provisionalOutstanding.greaterThan(0) && provisionalOutstanding.lessThan(lockedTarget.totalAmount)) {
+                        newStatus = ObligationStatus.PARTIAL;
+                    } else if (provisionalOutstanding.equals(lockedTarget.totalAmount)) {
+                        newStatus = ObligationStatus.OPEN;
+                    }
+
+                    await tx.cashbookObligation.update({
+                        where: { id: targetObligId },
+                        data: {
+                            outstandingAmount: provisionalOutstanding,
+                            status: newStatus
+                        }
+                    });
+
+                    // Audit for obligation state change
+                    await tx.auditLog.create({
+                        data: {
+                            userId,
+                            workspaceId: cashbook.workspaceId,
+                            action: AuditAction.OBLIGATION_UPDATED,
+                            resource: 'obligation',
+                            resourceId: targetObligId,
+                            details: {
+                                entryId,
+                                adjustedAmount: adjustment,
+                                newOutstanding: provisionalOutstanding,
+                            } as any
+                        }
+                    });
+                }
+            }
+
             // Update entry
             const updatedEntry = await tx.entry.update({
                 where: { id: entryId },
@@ -620,9 +648,6 @@ export class EntriesService {
                     ...(dto.contactId !== undefined ? { contactId: dto.contactId } : {}),
                     ...(dto.paymentModeId !== undefined ? { paymentModeId: dto.paymentModeId } : {}),
                     ...(dto.obligationId !== undefined ? { obligationId: dto.obligationId } : {}),
-                    ...(dto.entryDate && { entryDate: new Date(dto.entryDate) }),
-                    ...(dto.contactId !== undefined && { contactId: dto.contactId }),
-                    ...(dto.paymentModeId !== undefined && { paymentModeId: dto.paymentModeId }),
                     ...(dto.entryDate && { entryDate: new Date(dto.entryDate) }),
                     version: { increment: 1 },
                 },
@@ -852,17 +877,21 @@ export class EntriesService {
                 const lockedObligation = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId } });
 
                 const newOutstanding = lockedObligation.outstandingAmount.add(amount);
+                // Cap to totalAmount to prevent exceeding bounds
+                const cappedOutstanding = newOutstanding.greaterThan(lockedObligation.totalAmount)
+                    ? lockedObligation.totalAmount
+                    : newOutstanding;
                 let newStatus = lockedObligation.status;
-                if (newOutstanding.equals(lockedObligation.totalAmount)) {
+                if (cappedOutstanding.equals(lockedObligation.totalAmount)) {
                     newStatus = ObligationStatus.OPEN;
-                } else if (newOutstanding.greaterThan(0) && newOutstanding.lessThan(lockedObligation.totalAmount)) {
+                } else if (cappedOutstanding.greaterThan(0) && cappedOutstanding.lessThan(lockedObligation.totalAmount)) {
                     newStatus = ObligationStatus.PARTIAL;
                 }
 
                 await tx.cashbookObligation.update({
                     where: { id: entry.obligationId },
                     data: {
-                        outstandingAmount: newOutstanding,
+                        outstandingAmount: cappedOutstanding,
                         status: newStatus
                     }
                 });
@@ -878,7 +907,7 @@ export class EntriesService {
                             entryId: entry.id,
                             reason,
                             reversedAmount: amount,
-                            newOutstanding
+                            newOutstanding: cappedOutstanding
                         } as any
                     }
                 })
