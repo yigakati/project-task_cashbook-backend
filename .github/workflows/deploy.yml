@@ -58,14 +58,14 @@ jobs:
 
             # 1. Update the Deployment to use the new image SHA
             # K3s will see the new hash and automatically pull it (because of imagePullPolicy: Always)
-            kubectl set image deployment/cashbook-app \
-              cashbook-api=${{ env.IMAGE_NAME }}:${{ github.sha }} \
-              -n tast-project-cashbook-app
+            kubectl set image deployment/inchange-app \
+              inchange-api=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              -n inchange-app
 
             # 2. Trigger the InitContainer (DB Push) implicitly by restarting
             # (set image triggers a rollout, which runs init containers)
             
             # 3. Wait for rollout to finish
             # If the app crashes (or DB push fails), this times out and fails the GitHub Action
-            kubectl rollout status deployment/cashbook-app \
-              -n tast-project-cashbook-app --timeout=120s
+            kubectl rollout status deployment/inchange-app \
+              -n inchange-app --timeout=120s
