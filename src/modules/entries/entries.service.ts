@@ -196,24 +196,22 @@ export class EntriesService {
                 },
             });
 
-            // Update cashbook balance atomically ONLY if not linked to an account
+            // Update cashbook atomically. totalIncome/totalExpense ALWAYS update. Balance ONLY updates if not linked to an account.
             const balanceBefore = lockedCashbook.balance;
             const isIncome = dto.type === EntryType.INCOME;
 
             let balanceAfter = balanceBefore;
 
-            if (!dto.accountId) {
-                await tx.cashbook.update({
-                    where: { id: cashbookId },
-                    data: {
-                        balance: isIncome
-                            ? { increment: amount }
-                            : { decrement: amount },
-                        totalIncome: isIncome ? { increment: amount } : undefined,
-                        totalExpense: !isIncome ? { increment: amount } : undefined,
-                    },
-                });
+            await tx.cashbook.update({
+                where: { id: cashbookId },
+                data: {
+                    balance: !dto.accountId ? (isIncome ? { increment: amount } : { decrement: amount }) : undefined,
+                    totalIncome: isIncome ? { increment: amount } : undefined,
+                    totalExpense: !isIncome ? { increment: amount } : undefined,
+                },
+            });
 
+            if (!dto.accountId) {
                 balanceAfter = isIncome
                     ? balanceBefore.add(amount)
                     : balanceBefore.sub(amount);
@@ -425,20 +423,17 @@ export class EntriesService {
             const balanceBefore = lockedCashbook.balance;
             let balanceAfter = balanceBefore;
 
-            // ONLY reverse from cashbook if old entry was NOT linked to an account
-            if (!existingTx) {
-                // Remove old amount from balance
-                await tx.cashbook.update({
-                    where: { id: entry.cashbookId },
-                    data: {
-                        balance: wasIncome
-                            ? { decrement: oldAmount }
-                            : { increment: oldAmount },
-                        totalIncome: wasIncome ? { decrement: oldAmount } : undefined,
-                        totalExpense: !wasIncome ? { decrement: oldAmount } : undefined,
-                    },
-                });
+            // ALWAYS update totalIncome/totalExpense for the old entry. ONLY reverse from cashbook balance if old entry was NOT linked to an account
+            await tx.cashbook.update({
+                where: { id: entry.cashbookId },
+                data: {
+                    balance: !existingTx ? (wasIncome ? { decrement: oldAmount } : { increment: oldAmount }) : undefined,
+                    totalIncome: wasIncome ? { decrement: oldAmount } : undefined,
+                    totalExpense: !wasIncome ? { decrement: oldAmount } : undefined,
+                },
+            });
 
+            if (!existingTx) {
                 balanceAfter = wasIncome
                     ? balanceBefore.sub(oldAmount)
                     : balanceBefore.add(oldAmount);
@@ -449,19 +444,17 @@ export class EntriesService {
             const newAmount = dto.amount ? new Decimal(dto.amount) : entry.amount;
             const isIncome = newType === EntryType.INCOME;
 
-            // ONLY apply to cashbook if new entry is NOT linked to an account
-            if (!targetAccountId) {
-                await tx.cashbook.update({
-                    where: { id: entry.cashbookId },
-                    data: {
-                        balance: isIncome
-                            ? { increment: newAmount }
-                            : { decrement: newAmount },
-                        totalIncome: isIncome ? { increment: newAmount } : undefined,
-                        totalExpense: !isIncome ? { increment: newAmount } : undefined,
-                    },
-                });
+            // ALWAYS update totalIncome/totalExpense for the new entry. ONLY apply to cashbook balance if new entry is NOT linked to an account
+            await tx.cashbook.update({
+                where: { id: entry.cashbookId },
+                data: {
+                    balance: !targetAccountId ? (isIncome ? { increment: newAmount } : { decrement: newAmount }) : undefined,
+                    totalIncome: isIncome ? { increment: newAmount } : undefined,
+                    totalExpense: !isIncome ? { increment: newAmount } : undefined,
+                },
+            });
 
+            if (!targetAccountId) {
                 balanceAfter = isIncome
                     ? balanceAfter.add(newAmount)
                     : balanceAfter.sub(newAmount);
@@ -886,19 +879,17 @@ export class EntriesService {
 
             let balanceAfter = balanceBefore;
 
-            // Only reverse from cashbook if the entry was NOT linked to an account
-            if (!existingTx) {
-                await tx.cashbook.update({
-                    where: { id: entry.cashbookId },
-                    data: {
-                        balance: wasIncome
-                            ? { decrement: amount }
-                            : { increment: amount },
-                        totalIncome: wasIncome ? { decrement: amount } : undefined,
-                        totalExpense: !wasIncome ? { decrement: amount } : undefined,
-                    },
-                });
+            // ALWAYS modify totalIncome/totalExpense. Only reverse from cashbook balance if the entry was NOT linked to an account
+            await tx.cashbook.update({
+                where: { id: entry.cashbookId },
+                data: {
+                    balance: !existingTx ? (wasIncome ? { decrement: amount } : { increment: amount }) : undefined,
+                    totalIncome: wasIncome ? { decrement: amount } : undefined,
+                    totalExpense: !wasIncome ? { decrement: amount } : undefined,
+                },
+            });
 
+            if (!existingTx) {
                 balanceAfter = wasIncome
                     ? balanceBefore.sub(amount)
                     : balanceBefore.add(amount);
