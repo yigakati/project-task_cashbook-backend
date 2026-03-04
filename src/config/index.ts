@@ -26,7 +26,7 @@ const envSchema = z.object({
     CORS_ORIGINS: z.string().default('http://localhost:3001'),
 
     RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
-    RATE_LIMIT_MAX: z.coerce.number().default(500),
+    RATE_LIMIT_MAX: z.coerce.number().default(1000),
 
     MINIO_ENDPOINT: z.string().default('localhost'),
     MINIO_PORT: z.coerce.number().default(9000),

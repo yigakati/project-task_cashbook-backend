@@ -11,7 +11,7 @@ import { minioBreaker } from '../../config/breakers';
 import { AppError } from '../../core/errors/AppError';
 import { logger } from '../../utils/logger';
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_FILE_SIZE = 7 * 1024 * 1024; // 7MB
 const IMAGE_MIMES = new Set([
     'image/jpeg',
     'image/png',
@@ -34,7 +34,7 @@ export class StorageService {
         try {
             // ── Validation ──
             if (file.size > MAX_FILE_SIZE) {
-                throw new AppError(`File exceeds the 5MB limit`, 400, 'FILE_TOO_LARGE');
+                throw new AppError(`File exceeds the 7MB limit`, 400, 'FILE_TOO_LARGE');
             }
 
             // Verify magic numbers directly from the file on disk (reads only headers)
