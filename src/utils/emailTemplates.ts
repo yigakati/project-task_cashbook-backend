@@ -91,3 +91,25 @@ export function workspaceInviteSignupEmailTemplate(
         </p>
     </div>`;
 }
+
+/**
+ * Onboarding welcome email template for newly verified/created users.
+ */
+export function welcomeEmailTemplate(firstName: string): string {
+    return `
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;">
+        <h2 style="color: #111827; margin-bottom: 8px;">Welcome to ${config.APP_NAME}!</h2>
+        <p style="color: #6b7280; font-size: 15px; line-height: 1.6;">
+            Hi ${firstName}, we're absolutely thrilled to have you here! Our platform is designed to give you the best features to manage your accounts seamlessly and track your cash flows with unparalleled precision.
+        </p>
+        <div style="text-align: center; margin: 28px 0;">
+            <a href="${config.CORS_ORIGINS}" style="display: inline-block; padding: 12px 32px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;">Get Started Now</a>
+        </div>
+        <p style="color: #6b7280; font-size: 15px; line-height: 1.6;">
+            If you ever need any assistance, feel free to reach out. We are always here to help you succeed!
+        </p>
+        <p style="color: #9ca3af; font-size: 13px; margin-top: 32px;">
+            The ${config.APP_NAME} Team
+        </p>
+    </div>`;
+}

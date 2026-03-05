@@ -21,7 +21,7 @@ import {
 import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
-import { verificationEmailTemplate, passwordResetEmailTemplate } from '../../utils/emailTemplates';
+import { verificationEmailTemplate, passwordResetEmailTemplate, welcomeEmailTemplate } from '../../utils/emailTemplates';
 import { InvitesService } from '../invites/invites.service';
 
 const SUSPICIOUS_FAILURE_THRESHOLD = 5;
@@ -341,6 +341,13 @@ export class AuthService {
 
         await redis.del(`verification:${user.id}`);
 
+        // Send onboarding welcome email after successful verification
+        sendEmail({
+            to: user.email,
+            subject: `Welcome to ${config.APP_NAME}!`,
+            html: welcomeEmailTemplate(user.firstName),
+        }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
+
         await this.prisma.auditLog.create({
             data: {
                 userId: user.id,
@@ -556,6 +563,7 @@ export class AuthService {
         const firstName = payload.given_name || payload.name?.split(' ')[0] || 'User';
         const lastName = payload.family_name || payload.name?.split(' ').slice(1).join(' ') || '';
 
+        let isNewUser = false;
         // Resolve user inside a transaction
         const user = await this.prisma.$transaction(async (tx) => {
             // Case A: Existing Google user
@@ -651,8 +659,18 @@ export class AuthService {
                 },
             });
 
+            isNewUser = true;
+
             return newUser;
         });
+
+        if (isNewUser) {
+            sendEmail({
+                to: user.email,
+                subject: `Welcome to ${config.APP_NAME}!`,
+                html: welcomeEmailTemplate(user.firstName),
+            }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
+        }
 
         // Resolve pending invites (fire-and-forget)
         this.invitesService.resolveInvites(user.id, user.email)
