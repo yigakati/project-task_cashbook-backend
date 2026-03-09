@@ -24,6 +24,7 @@ import { MembersRepository } from '../modules/members/members.repository';
 import { PaymentModesRepository } from '../modules/payment-modes/payment-modes.repository';
 import { UsersRepository } from '../modules/users/users.repository';
 import { WorkspacesRepository } from '../modules/workspaces/workspaces.repository';
+import { InventoryRepository } from '../modules/inventory/inventory.repository';
 
 container.registerSingleton(AuthRepository);
 container.registerSingleton(CashbooksRepository);
@@ -34,6 +35,7 @@ container.registerSingleton(MembersRepository);
 container.registerSingleton(PaymentModesRepository);
 container.registerSingleton(UsersRepository);
 container.registerSingleton(WorkspacesRepository);
+container.registerSingleton(InventoryRepository);
 
 // ─── Services ──────────────────────────────────────────
 import { AuthService } from '../modules/auth/auth.service';
@@ -50,6 +52,7 @@ import { UsersService } from '../modules/users/users.service';
 import { WorkspacesService } from '../modules/workspaces/workspaces.service';
 import { InvitesService } from '../modules/invites/invites.service';
 import { MinioCleanupJob } from '../jobs/s3Cleanup';
+import { InventoryService } from '../modules/inventory/inventory.service';
 
 container.registerSingleton(AuthService);
 container.registerSingleton(CashbooksService);
@@ -65,6 +68,7 @@ container.registerSingleton(UsersService);
 container.registerSingleton(WorkspacesService);
 container.registerSingleton(InvitesService);
 container.registerSingleton(MinioCleanupJob);
+container.registerSingleton(InventoryService);
 
 // ─── Controllers ───────────────────────────────────────
 import { AuthController } from '../modules/auth/auth.controller';
@@ -81,6 +85,7 @@ import { WorkspacesController } from '../modules/workspaces/workspaces.controlle
 import { AdminController } from '../modules/admin/admin.controller';
 import { AuditController } from '../modules/audit/audit.controller';
 import { InvitesController } from '../modules/invites/invites.controller';
+import { InventoryController } from '../modules/inventory/inventory.controller';
 
 container.registerSingleton(AuthController);
 container.registerSingleton(CashbooksController);
@@ -96,5 +101,6 @@ container.registerSingleton(WorkspacesController);
 container.registerSingleton(AdminController);
 container.registerSingleton(AuditController);
 container.registerSingleton(InvitesController);
+container.registerSingleton(InventoryController);
 
 export { container };

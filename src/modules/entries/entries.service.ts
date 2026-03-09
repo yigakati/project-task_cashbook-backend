@@ -23,12 +23,14 @@ import { logger } from '../../utils/logger';
 import { isDateInPast } from '../../utils/helpers';
 import { CashbookPermission, hasPermission } from '../../core/types/permissions';
 import { ObligationStatus, ObligationType } from '@prisma/client';
+import { InventoryService } from '../inventory/inventory.service';
 
 @injectable()
 export class EntriesService {
     constructor(
         private entriesRepository: EntriesRepository,
         @inject('PrismaClient') private prisma: PrismaClient,
+        private inventoryService: InventoryService,
     ) { }
 
     // ─── List Entries ──────────────────────────────────
@@ -350,6 +352,19 @@ export class EntriesService {
                     },
                 },
             });
+
+            // ─── Inventory Integration (non-intrusive) ─────────────
+            if (dto.inventoryItems && dto.inventoryItems.length > 0) {
+                await this.inventoryService.processEntryInventory(
+                    tx,
+                    cashbook.workspaceId,
+                    newEntry.id,
+                    dto.type,
+                    amount,
+                    dto.inventoryItems,
+                    userId,
+                );
+            }
 
             return newEntry;
         });

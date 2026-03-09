@@ -5,12 +5,14 @@ import { CreateAccountTransactionBody, UpdateAccountTransactionBody } from './ac
 import { AppError, NotFoundError } from '../../core/errors/AppError';
 import { AuditAction, EntryType } from '../../core/types';
 import { Decimal } from '@prisma/client/runtime/library';
+import { InventoryService } from '../inventory/inventory.service';
 
 @injectable()
 export class AccountTransactionsService {
     constructor(
         private repository: AccountTransactionsRepository,
         @inject('PrismaClient') private prisma: PrismaClient,
+        private inventoryService: InventoryService,
     ) { }
 
     async getAllTransactionsByAccount(accountId: string, workspaceId: string, pagination?: { skip: number; take: number }) {
@@ -122,6 +124,19 @@ export class AccountTransactionsService {
                     },
                 }
             });
+
+            // ─── Inventory Integration (non-intrusive) ─────────────
+            if (data.inventoryItems && data.inventoryItems.length > 0) {
+                await this.inventoryService.processAccountTransactionInventory(
+                    tx,
+                    workspaceId,
+                    transaction.id,
+                    data.type,
+                    amount,
+                    data.inventoryItems,
+                    userId,
+                );
+            }
 
             return transaction;
         });

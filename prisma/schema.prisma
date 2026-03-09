@@ -100,6 +100,7 @@ model Workspace {
   accountTypes       AccountType[]
   accounts           Account[]
   accountCategories  AccountCategory[]
+  inventoryItems     InventoryItem[]
 
   @@index([ownerId])
   @@index([type])
@@ -578,4 +579,89 @@ enum TransactionSourceType {
 enum AuthProvider {
   LOCAL
   GOOGLE
+}
+
+// ─── Inventory Subsystem ────────────────────────────────
+
+enum InventoryCostMethod {
+  WEIGHTED_AVERAGE
+  FIFO
+  LIFO
+}
+
+enum InventoryTransactionType {
+  PURCHASE
+  SALE
+  ADJUSTMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  RETURN_IN
+  RETURN_OUT
+}
+
+enum InventoryReferenceType {
+  ENTRY
+  ACCOUNT_TRANSACTION
+  OBLIGATION
+  MANUAL
+}
+
+model InventoryItem {
+  id                 String              @id @default(uuid()) @db.Uuid
+  workspaceId        String              @map("workspace_id") @db.Uuid
+  name               String
+  sku                String?
+  unit               String
+  category           String?
+  lowStockThreshold  Int?                @map("low_stock_threshold")
+  costMethod         InventoryCostMethod @default(WEIGHTED_AVERAGE) @map("cost_method")
+  allowNegativeStock Boolean             @default(false) @map("allow_negative_stock")
+  isActive           Boolean             @default(true) @map("is_active")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  workspace    Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  stock        InventoryStock?
+  transactions InventoryTransaction[]
+
+  @@unique([workspaceId, sku])
+  @@index([workspaceId])
+  @@index([isActive])
+  @@map("inventory_items")
+}
+
+model InventoryStock {
+  id             String  @id @default(uuid()) @db.Uuid
+  itemId         String  @unique @map("item_id") @db.Uuid
+  quantityOnHand Int     @default(0) @map("quantity_on_hand")
+  averageCost    Decimal @default(0) @map("average_cost") @db.Decimal(20, 4)
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@map("inventory_stock")
+}
+
+model InventoryTransaction {
+  id              String                   @id @default(uuid()) @db.Uuid
+  workspaceId     String                   @map("workspace_id") @db.Uuid
+  itemId          String                   @map("item_id") @db.Uuid
+  transactionType InventoryTransactionType @map("transaction_type")
+  quantity        Int
+  unitCost        Decimal                  @map("unit_cost") @db.Decimal(20, 4)
+  totalCost       Decimal                  @map("total_cost") @db.Decimal(20, 4)
+  costOfGoodsSold Decimal?                 @map("cost_of_goods_sold") @db.Decimal(20, 4)
+  referenceType   InventoryReferenceType?  @map("reference_type")
+  referenceId     String?                  @map("reference_id") @db.Uuid
+  notes           String?
+  createdById     String                   @map("created_by_id") @db.Uuid
+  createdAt       DateTime                 @default(now()) @map("created_at")
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@index([workspaceId])
+  @@index([referenceType, referenceId])
+  @@index([transactionType])
+  @@index([createdAt])
+  @@map("inventory_transactions")
 }

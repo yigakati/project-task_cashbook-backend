@@ -16,6 +16,11 @@ export const createEntrySchema = z.object({
     accountId: z.string().uuid().optional(),
     obligationId: z.string().uuid().optional(),
     entryDate: z.string().datetime({ message: 'Entry date must be a valid ISO date' }),
+    inventoryItems: z.array(z.object({
+        itemId: z.string().uuid('Invalid inventory item ID'),
+        quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+        unitCost: decimalString.optional(),
+    })).optional(),
 });
 
 export const updateEntrySchema = z.object({
@@ -29,6 +34,11 @@ export const updateEntrySchema = z.object({
     accountId: z.string().uuid().nullable().optional(),
     obligationId: z.string().uuid().nullable().optional(),
     entryDate: z.string().datetime().optional(),
+    inventoryItems: z.array(z.object({
+        itemId: z.string().uuid('Invalid inventory item ID'),
+        quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+        unitCost: decimalString.optional(),
+    })).optional(),
 });
 
 export const deleteEntrySchema = z.object({

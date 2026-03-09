@@ -14,6 +14,11 @@ export const createAccountTransactionSchema = z.object({
     chargeAmount: decimalString.optional(),
     description: z.string().min(1, 'Description is required').max(255, 'Description too long'),
     accountCategoryId: z.string().uuid('Invalid category ID').optional().nullable(),
+    inventoryItems: z.array(z.object({
+        itemId: z.string().uuid('Invalid inventory item ID'),
+        quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+        unitCost: decimalString.optional(),
+    })).optional(),
 });
 
 export const updateAccountTransactionSchema = createAccountTransactionSchema.partial();
