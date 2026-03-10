@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, TransactionSourceType } from '@prisma/client';
+import { PrismaClient, TransactionSourceType, InventoryReferenceType } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { EntriesRepository } from './entries.repository';
 import {
@@ -762,6 +762,27 @@ export class EntriesService {
                 },
             });
 
+            // ─── Inventory Integration (reverse old + reapply) ─────
+            // Reverse any existing inventory transactions for this entry
+            await this.inventoryService.reverseInventoryForReference(
+                tx,
+                InventoryReferenceType.ENTRY,
+                entryId,
+            );
+
+            // If new inventory items provided, process them
+            if (dto.inventoryItems && dto.inventoryItems.length > 0) {
+                await this.inventoryService.processEntryInventory(
+                    tx,
+                    cashbook.workspaceId,
+                    entryId,
+                    newType,
+                    newAmount,
+                    dto.inventoryItems,
+                    userId,
+                );
+            }
+
             return updatedEntry;
         });
 
@@ -997,6 +1018,13 @@ export class EntriesService {
                     }
                 })
             }
+
+            // ─── Inventory Integration (reverse on delete) ────────
+            await this.inventoryService.reverseInventoryForReference(
+                tx,
+                InventoryReferenceType.ENTRY,
+                entry.id,
+            );
 
             // Soft-delete the entry
             await tx.entry.update({

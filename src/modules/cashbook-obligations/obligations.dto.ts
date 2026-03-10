@@ -6,6 +6,12 @@ const decimalString = z.string().regex(
     'Amount must be a valid decimal number with up to 4 decimal places'
 );
 
+const inventoryLineItem = z.object({
+    itemId: z.string().uuid('Invalid inventory item ID'),
+    quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+    unitCost: decimalString.optional(),
+});
+
 export const createObligationSchema = z.object({
     type: z.nativeEnum(ObligationType).refine((val) => val !== undefined, { message: 'Invalid obligation type' }),
     title: z.string().min(1, 'Title is required').max(200, 'Title is too long'),
@@ -14,6 +20,7 @@ export const createObligationSchema = z.object({
     dueDate: z.string()
         .refine((val) => !isNaN(Date.parse(val)), { message: 'Invalid date format' })
         .optional(),
+    inventoryItems: z.array(inventoryLineItem).optional(),
 });
 
 export const updateObligationSchema = z.object({

@@ -85,6 +85,12 @@ export const cogsReportQuerySchema = z.object({
     endDate: z.string().datetime().optional(),
 });
 
+// ─── Params schemas ────────────────────────────────────
+
+export const itemIdParamSchema = z.object({
+    itemId: z.string().uuid('Invalid inventory item ID'),
+}).passthrough();
+
 // ─── Types ─────────────────────────────────────────────
 
 export type CreateInventoryItemDto = z.infer<typeof createInventoryItemSchema>;

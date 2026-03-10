@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, TransactionSourceType } from '@prisma/client';
+import { PrismaClient, TransactionSourceType, InventoryReferenceType } from '@prisma/client';
 import { AccountTransactionsRepository } from './account-transactions.repository';
 import { CreateAccountTransactionBody, UpdateAccountTransactionBody } from './account-transactions.dto';
 import { AppError, NotFoundError } from '../../core/errors/AppError';
@@ -263,6 +263,25 @@ export class AccountTransactionsService {
                 }
             });
 
+            // ─── Inventory Integration (reverse old + reapply) ─────
+            await this.inventoryService.reverseInventoryForReference(
+                tx,
+                InventoryReferenceType.ACCOUNT_TRANSACTION,
+                id,
+            );
+
+            if (data.inventoryItems && data.inventoryItems.length > 0) {
+                await this.inventoryService.processAccountTransactionInventory(
+                    tx,
+                    workspaceId,
+                    id,
+                    newType,
+                    newAmount,
+                    data.inventoryItems,
+                    userId,
+                );
+            }
+
             return updatedTransaction;
         });
     }
@@ -313,6 +332,13 @@ export class AccountTransactionsService {
             });
 
             const balanceAfter = wasIncome ? balanceBefore.sub(effectiveAmount) : balanceBefore.add(effectiveAmount);
+
+            // ─── Inventory Integration (reverse on delete) ────────
+            await this.inventoryService.reverseInventoryForReference(
+                tx,
+                InventoryReferenceType.ACCOUNT_TRANSACTION,
+                id,
+            );
 
             await tx.accountTransaction.delete({ where: { id } });
 

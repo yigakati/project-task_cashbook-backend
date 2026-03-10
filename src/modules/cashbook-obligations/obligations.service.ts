@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, ObligationStatus, ObligationType } from '@prisma/client';
+import { PrismaClient, ObligationStatus, ObligationType, InventoryReferenceType } from '@prisma/client';
 import { ObligationsRepository } from './obligations.repository';
 import {
     CreateObligationDto,
@@ -9,12 +9,14 @@ import {
 import { NotFoundError, AppError } from '../../core/errors/AppError';
 import { AuditAction } from '../../core/types';
 import { Decimal } from '@prisma/client/runtime/library';
+import { InventoryService } from '../inventory/inventory.service';
 
 @injectable()
 export class ObligationsService {
     constructor(
         private obligationsRepo: ObligationsRepository,
         @inject('PrismaClient') private prisma: PrismaClient,
+        private inventoryService: InventoryService,
     ) { }
 
     // ─── List Obligations ──────────────────────────────
@@ -90,6 +92,19 @@ export class ObligationsService {
                     } as any
                 }
             });
+
+            // ─── Inventory Integration ──────────────────────────────
+            // For PAYABLE obligations (goods purchases), stock-in the items
+            if (dto.inventoryItems && dto.inventoryItems.length > 0 && dto.type === ObligationType.PAYABLE) {
+                await this.inventoryService.processObligationInventory(
+                    tx,
+                    cashbook.workspaceId,
+                    newObligation.id,
+                    amount,
+                    dto.inventoryItems,
+                    userId,
+                );
+            }
 
             return newObligation;
         });

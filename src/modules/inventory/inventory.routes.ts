@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { container } from 'tsyringe';
 import { InventoryController } from './inventory.controller';
 import { authenticate } from '../../middlewares/authenticate';
-import { validate } from '../../middlewares/validate';
+import { validate, validateMultiple } from '../../middlewares/validate';
 import { requireWorkspaceMember } from '../../middlewares/authorize';
 import { WorkspaceRole } from '../../core/types';
 import {
@@ -12,6 +12,7 @@ import {
     createInventoryTransactionSchema,
     inventoryTransactionQuerySchema,
     cogsReportQuerySchema,
+    itemIdParamSchema,
 } from './inventory.dto';
 
 const router = Router({ mergeParams: true });
@@ -34,6 +35,7 @@ router.get(
 router.get(
     '/items/:itemId',
     requireWorkspaceMember() as any,
+    validate(itemIdParamSchema, 'params'),
     controller.getItem.bind(controller) as any
 );
 
@@ -49,7 +51,10 @@ router.post(
 router.patch(
     '/items/:itemId',
     requireWorkspaceMember([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]) as any,
-    validate(updateInventoryItemSchema),
+    validateMultiple({
+        params: itemIdParamSchema,
+        body: updateInventoryItemSchema,
+    }),
     controller.updateItem.bind(controller) as any
 );
 
@@ -57,6 +62,7 @@ router.patch(
 router.delete(
     '/items/:itemId',
     requireWorkspaceMember([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]) as any,
+    validate(itemIdParamSchema, 'params'),
     controller.deactivateItem.bind(controller) as any
 );
 
@@ -98,6 +104,7 @@ router.get(
 router.get(
     '/reports/movements/:itemId',
     requireWorkspaceMember() as any,
+    validate(itemIdParamSchema, 'params'),
     controller.getMovements.bind(controller) as any
 );
 

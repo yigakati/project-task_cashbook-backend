@@ -93,26 +93,29 @@ export class InventoryService {
     }
 
     async getItems(workspaceId: string, query: InventoryItemQueryDto) {
-        const skip = (query.page - 1) * query.limit;
+        const page = Number(query.page) || 1;
+        const limit = Number(query.limit) || 20;
+        const skip = (page - 1) * limit;
+
         const { items, total } = await this.repository.findItemsByWorkspace(workspaceId, {
             skip,
-            take: query.limit,
+            take: limit,
             category: query.category,
             isActive: query.isActive !== undefined ? query.isActive === 'true' : undefined,
             search: query.search,
         });
 
-        const totalPages = Math.ceil(total / query.limit);
+        const totalPages = Math.ceil(total / limit);
 
         return {
             data: items,
             pagination: {
-                page: query.page,
-                limit: query.limit,
+                page,
+                limit,
                 total,
                 totalPages,
-                hasNext: query.page < totalPages,
-                hasPrevious: query.page > 1,
+                hasNext: page < totalPages,
+                hasPrevious: page > 1,
             },
         };
     }
@@ -213,9 +216,13 @@ export class InventoryService {
             throw new AppError('Cannot create transactions for an inactive item', 400, 'ITEM_INACTIVE');
         }
 
-        // Validate reference exists if provided
-        if (dto.referenceType && dto.referenceId) {
-            await this.validateReference(dto.referenceType as any, dto.referenceId, workspaceId);
+        // Immutability guard: manual endpoint can only create MANUAL-referenced transactions
+        if (dto.referenceType && dto.referenceType !== 'MANUAL') {
+            throw new AppError(
+                'Transactions linked to financial records can only be created through the corresponding financial module',
+                400,
+                'INVALID_REFERENCE_TYPE'
+            );
         }
 
         const transactionType = dto.transactionType as InventoryTransactionType;
@@ -258,28 +265,31 @@ export class InventoryService {
     }
 
     async getTransactions(workspaceId: string, query: InventoryTransactionQueryDto) {
-        const skip = (query.page - 1) * query.limit;
+        const page = Number(query.page) || 1;
+        const limit = Number(query.limit) || 20;
+        const skip = (page - 1) * limit;
+
         const { transactions, total } = await this.repository.findTransactionsByWorkspace(workspaceId, {
             skip,
-            take: query.limit,
+            take: limit,
             itemId: query.itemId,
             transactionType: query.transactionType,
             startDate: query.startDate,
             endDate: query.endDate,
-            sortOrder: query.sortOrder,
+            sortOrder: query.sortOrder || 'desc',
         });
 
-        const totalPages = Math.ceil(total / query.limit);
+        const totalPages = Math.ceil(total / limit);
 
         return {
             data: transactions,
             pagination: {
-                page: query.page,
-                limit: query.limit,
+                page,
+                limit,
                 total,
                 totalPages,
-                hasNext: query.page < totalPages,
-                hasPrevious: query.page > 1,
+                hasNext: page < totalPages,
+                hasPrevious: page > 1,
             },
         };
     }
@@ -574,6 +584,152 @@ export class InventoryService {
                     null,
                     tx,
                 );
+            }
+        }
+    }
+
+    /**
+     * Process inventory line items attached to a PAYABLE obligation.
+     * Called within the Obligation's own $transaction context.
+     * Stocks in goods when a payable obligation is created.
+     */
+    async processObligationInventory(
+        tx: any,
+        workspaceId: string,
+        obligationId: string,
+        obligationAmount: Decimal,
+        inventoryItems: InventoryLineItemDto[],
+        createdById: string,
+    ) {
+        for (const lineItem of inventoryItems) {
+            const item = await tx.inventoryItem.findUnique({
+                where: { id: lineItem.itemId },
+                include: { stock: true },
+            });
+
+            if (!item || item.workspaceId !== workspaceId) {
+                throw new AppError(`Inventory item ${lineItem.itemId} not found`, 404, 'ITEM_NOT_FOUND');
+            }
+            if (!item.isActive) {
+                throw new AppError(`Inventory item "${item.name}" is inactive`, 400, 'ITEM_INACTIVE');
+            }
+
+            let unitCost: Decimal;
+            if (lineItem.unitCost) {
+                unitCost = new Decimal(lineItem.unitCost);
+            } else {
+                const totalQty = inventoryItems.reduce((sum, li) => sum + li.quantity, 0);
+                unitCost = obligationAmount.div(totalQty);
+            }
+
+            await this.processStockIn(
+                workspaceId,
+                lineItem.itemId,
+                InventoryTransactionType.PURCHASE,
+                lineItem.quantity,
+                unitCost,
+                createdById,
+                InventoryReferenceType.OBLIGATION,
+                obligationId,
+                null,
+                tx,
+            );
+        }
+    }
+
+    /**
+     * Reverse all inventory transactions linked to a specific financial reference.
+     * Creates compensating transactions (opposite direction) to restore stock.
+     * Used when entries/account-transactions are updated or deleted.
+     *
+     * @param tx - Prisma transaction context
+     * @param referenceType - The type of financial reference (ENTRY, ACCOUNT_TRANSACTION, OBLIGATION)
+     * @param referenceId - The ID of the financial record
+     */
+    async reverseInventoryForReference(
+        tx: any,
+        referenceType: InventoryReferenceType,
+        referenceId: string,
+    ) {
+        // Find all inventory transactions linked to this reference
+        const linkedTransactions = await tx.inventoryTransaction.findMany({
+            where: { referenceType, referenceId },
+            orderBy: { createdAt: 'asc' },
+        });
+
+        if (linkedTransactions.length === 0) return;
+
+        for (const invTx of linkedTransactions) {
+            const stock = await tx.inventoryStock.findUnique({
+                where: { itemId: invTx.itemId },
+            });
+
+            if (!stock) continue;
+
+            const absQuantity = Math.abs(invTx.quantity);
+
+            if (invTx.quantity > 0) {
+                // Original was stock-in → reverse = stock-out
+                const avgCost = new Decimal(stock.averageCost);
+                const cogs = avgCost.mul(absQuantity);
+                const newQty = stock.quantityOnHand - absQuantity;
+
+                await tx.inventoryStock.update({
+                    where: { itemId: invTx.itemId },
+                    data: { quantityOnHand: newQty },
+                });
+
+                await tx.inventoryTransaction.create({
+                    data: {
+                        workspaceId: invTx.workspaceId,
+                        itemId: invTx.itemId,
+                        transactionType: InventoryTransactionType.ADJUSTMENT,
+                        quantity: -absQuantity,
+                        unitCost: avgCost,
+                        totalCost: cogs,
+                        costOfGoodsSold: cogs,
+                        referenceType,
+                        referenceId,
+                        notes: `Reversal: ${referenceType} ${referenceId} updated/deleted`,
+                        createdById: invTx.createdById,
+                    },
+                });
+            } else {
+                // Original was stock-out → reverse = stock-in
+                const returnUnitCost = new Decimal(invTx.unitCost);
+                const totalCost = returnUnitCost.mul(absQuantity);
+
+                // Recalculate WAC on stock-in reversal
+                const currentQty = stock.quantityOnHand;
+                const currentAvgCost = new Decimal(stock.averageCost);
+                const totalExistingValue = currentAvgCost.mul(currentQty);
+                const newTotalQty = currentQty + absQuantity;
+                const newAvgCost = newTotalQty > 0
+                    ? totalExistingValue.add(totalCost).div(newTotalQty)
+                    : new Decimal(0);
+
+                await tx.inventoryStock.update({
+                    where: { itemId: invTx.itemId },
+                    data: {
+                        quantityOnHand: newTotalQty,
+                        averageCost: newAvgCost,
+                    },
+                });
+
+                await tx.inventoryTransaction.create({
+                    data: {
+                        workspaceId: invTx.workspaceId,
+                        itemId: invTx.itemId,
+                        transactionType: InventoryTransactionType.ADJUSTMENT,
+                        quantity: absQuantity,
+                        unitCost: returnUnitCost,
+                        totalCost,
+                        referenceType,
+                        referenceId,
+                        notes: `Reversal: ${referenceType} ${referenceId} updated/deleted`,
+                        createdById: invTx.createdById,
+                    },
+                });
             }
         }
     }
