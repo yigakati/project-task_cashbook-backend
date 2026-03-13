@@ -22,7 +22,6 @@ import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
 import { verificationEmailTemplate, passwordResetEmailTemplate, welcomeEmailTemplate } from '../../utils/emailTemplates';
-import { InvitesService } from '../invites/invites.service';
 
 const SUSPICIOUS_FAILURE_THRESHOLD = 5;
 const OTP_TTL_SECONDS = 15 * 60; // 15 minutes
@@ -31,7 +30,6 @@ const OTP_TTL_SECONDS = 15 * 60; // 15 minutes
 export class AuthService {
     constructor(
         private authRepository: AuthRepository,
-        private invitesService: InvitesService,
         @inject('PrismaClient') private prisma: PrismaClient,
     ) { }
 
@@ -79,10 +77,6 @@ export class AuthService {
 
             return user;
         });
-
-        // Resolve any pending workspace invites for this email
-        this.invitesService.resolveInvites(result.id, dto.email)
-            .catch((err) => logger.error('Failed to resolve pending invites', { email: dto.email, err }));
 
         // Generate and store verification OTP
         const otp = this.generateOTP();
@@ -671,10 +665,6 @@ export class AuthService {
                 html: welcomeEmailTemplate(user.firstName),
             }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
         }
-
-        // Resolve pending invites (fire-and-forget)
-        this.invitesService.resolveInvites(user.id, user.email)
-            .catch((err) => logger.error('Failed to resolve pending invites', { email: user.email, err }));
 
         // Generate tokens (using existing token system)
         const accessToken = this.generateAccessToken(user);

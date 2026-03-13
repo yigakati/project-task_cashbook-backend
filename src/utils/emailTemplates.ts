@@ -50,17 +50,17 @@ export function workspaceInviteEmailTemplate(
 ): string {
     return `
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;">
-        <h2 style="color: #111827; margin-bottom: 8px;">You've been added to a workspace</h2>
+        <h2 style="color: #111827; margin-bottom: 8px;">You've been invited to a workspace</h2>
         <p style="color: #6b7280; font-size: 15px; line-height: 1.6;">
-            Hi ${recipientName}, <strong>${inviterName}</strong> has added you to the
+            Hi ${recipientName}, <strong>${inviterName}</strong> has invited you to join the
             <strong>${workspaceName}</strong> workspace on <strong>${config.APP_NAME}</strong>
             as a <strong>${role}</strong>.
         </p>
         <div style="text-align: center; margin: 28px 0;">
-            <a href="${config.CORS_ORIGINS}" style="display: inline-block; padding: 12px 32px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;">Log in to get started</a>
+            <a href="${config.CORS_ORIGINS}" style="display: inline-block; padding: 12px 32px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;">Log in to review your invitations</a>
         </div>
         <p style="color: #9ca3af; font-size: 13px;">
-            You can access this workspace immediately after logging in.
+            You can accept or decline this invitation from your pending invitations dashboard.
         </p>
     </div>`;
 }

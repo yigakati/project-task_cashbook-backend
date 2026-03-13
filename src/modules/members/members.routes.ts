@@ -19,6 +19,13 @@ router.get(
     membersController.getMembers.bind(membersController) as any
 );
 
+// Get pending invites for the workspace
+router.get(
+    '/invites/pending',
+    requireWorkspaceMember([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]) as any,
+    membersController.getPendingInvites.bind(membersController) as any
+);
+
 // Invite member
 router.post(
     '/',

@@ -22,6 +22,10 @@ export class MembersService {
         return this.membersRepository.findByWorkspaceId(workspaceId);
     }
 
+    async getPendingInvites(workspaceId: string) {
+        return this.invitesService.getWorkspacePendingInvites(workspaceId);
+    }
+
     async inviteMember(workspaceId: string, invitedByUserId: string, dto: InviteMemberDto) {
         // Get workspace details for the email
         const workspace = await this.prisma.workspace.findUnique({
@@ -57,7 +61,6 @@ export class MembersService {
         });
 
         if (targetUser) {
-            // ─── Existing user: add directly + send notification email ───
             if (!targetUser.isActive) {
                 throw new AppError('Cannot invite deactivated user', 400, 'INVALID_OPERATION');
             }
@@ -67,24 +70,31 @@ export class MembersService {
             if (existing) {
                 throw new ConflictError('User is already a member of this workspace');
             }
+        }
 
-            const member = await this.membersRepository.addMember(workspaceId, targetUser.id, dto.role);
+        const invite = await this.invitesService.createPendingInvite({
+            email: dto.email,
+            workspaceId,
+            role: dto.role as any,
+            invitedById: invitedByUserId,
+        });
 
-            await this.prisma.auditLog.create({
-                data: {
-                    userId: invitedByUserId,
-                    workspaceId,
-                    action: AuditAction.MEMBER_INVITED,
-                    resource: 'workspace_member',
-                    resourceId: member.id,
-                    details: { invitedEmail: dto.email, role: dto.role } as any,
-                },
-            });
+        await this.prisma.auditLog.create({
+            data: {
+                userId: invitedByUserId,
+                workspaceId,
+                action: AuditAction.MEMBER_INVITED,
+                resource: 'pending_invite',
+                resourceId: invite.id,
+                details: { invitedEmail: dto.email, role: dto.role, pending: true } as any,
+            },
+        });
 
-            // Send "you've been added" email
+        if (targetUser) {
+            // Send "you have a new invite" email
             sendEmail({
                 to: dto.email,
-                subject: `You've been added to ${workspace.name} on ${config.APP_NAME}`,
+                subject: `You've been invited to ${workspace.name} on ${config.APP_NAME}`,
                 html: workspaceInviteEmailTemplate(
                     targetUser.firstName,
                     workspace.name,
@@ -92,28 +102,7 @@ export class MembersService {
                     dto.role,
                 ),
             }).catch((err) => logger.error('Failed to send workspace invite email', { email: dto.email, err }));
-
-            return { member, status: 'added' as const };
         } else {
-            // ─── Unregistered user: create pending invite + send signup email ───
-            const invite = await this.invitesService.createPendingInvite({
-                email: dto.email,
-                workspaceId,
-                role: dto.role as any,
-                invitedById: invitedByUserId,
-            });
-
-            await this.prisma.auditLog.create({
-                data: {
-                    userId: invitedByUserId,
-                    workspaceId,
-                    action: AuditAction.MEMBER_INVITED,
-                    resource: 'pending_invite',
-                    resourceId: invite.id,
-                    details: { invitedEmail: dto.email, role: dto.role, pending: true } as any,
-                },
-            });
-
             // Send "sign up to join" email
             sendEmail({
                 to: dto.email,
@@ -125,9 +114,9 @@ export class MembersService {
                     dto.role,
                 ),
             }).catch((err) => logger.error('Failed to send workspace invite signup email', { email: dto.email, err }));
-
-            return { invite, status: 'pending' as const };
         }
+
+        return { invite, status: 'pending' as const };
     }
 
     async updateMemberRole(

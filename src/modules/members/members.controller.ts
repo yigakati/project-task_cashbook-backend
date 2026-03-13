@@ -21,6 +21,21 @@ export class MembersController {
         }
     }
 
+    async getPendingInvites(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const invites = await this.membersService.getPendingInvites(req.params.workspaceId as string);
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: invites.length > 0 
+                    ? `Found ${invites.length} pending invitation(s)` 
+                    : 'No pending invitations',
+                data: invites,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
     async inviteMember(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const result = await this.membersService.inviteMember(
@@ -29,14 +44,10 @@ export class MembersController {
                 req.body
             );
 
-            const isAdded = result.status === 'added';
-
-            res.status(isAdded ? StatusCodes.CREATED : StatusCodes.OK).json({
+            res.status(StatusCodes.OK).json({
                 success: true,
-                message: isAdded
-                    ? 'Member added successfully. An email notification has been sent.'
-                    : 'Invitation sent. The user will be added once they sign up.',
-                data: isAdded ? result.member : result.invite,
+                message: 'Invitation sent. The user will be added once they accept it.',
+                data: result.invite,
             });
         } catch (error) {
             next(error);

@@ -2,6 +2,8 @@ import { injectable, inject } from 'tsyringe';
 import { PrismaClient, WorkspaceRole } from '@prisma/client';
 import crypto from 'crypto';
 import { logger } from '../../utils/logger';
+import { NotFoundError, AppError } from '../../core/errors/AppError';
+import { AuditAction } from '../../core/types';
 
 export interface PendingInviteData {
     email: string;
@@ -11,11 +13,10 @@ export interface PendingInviteData {
 }
 
 /**
- * Manages invite flows for users who haven't registered yet.
+ * Manages invite flows for users.
  *
- * When a member is invited to a workspace but doesn't have an account,
- * we store a PendingInvite with a unique token and expiry. On
- * registration, the system resolves all pending invites for that email.
+ * When a member is invited to a workspace, we store a PendingInvite with a unique token and expiry. 
+ * The user can explicitly accept or decline it from their dashboard.
  */
 @injectable()
 export class InvitesService {
@@ -58,61 +59,98 @@ export class InvitesService {
     }
 
     /**
-     * After registration, resolve all pending invites for this email
-     * by adding the user to the appropriate workspaces.
+     * Explicitly accept an invitation to join a workspace.
      */
-    async resolveInvites(userId: string, email: string): Promise<number> {
-        const invites = await this.prisma.pendingInvite.findMany({
-            where: { email },
+    async acceptInvite(inviteId: string, userId: string, email: string) {
+        const invite = await this.prisma.pendingInvite.findUnique({
+            where: { id: inviteId },
         });
 
-        if (invites.length === 0) return 0;
-
-        let resolved = 0;
-
-        for (const invite of invites) {
-            // Skip expired invites
-            if (invite.expiresAt < new Date()) {
-                await this.prisma.pendingInvite.delete({ where: { id: invite.id } });
-                continue;
-            }
-
-            try {
-                await this.prisma.$transaction(async (tx) => {
-                    // Add to workspace if not already a member
-                    const existingWsMember = await tx.workspaceMember.findUnique({
-                        where: {
-                            workspaceId_userId: {
-                                workspaceId: invite.workspaceId,
-                                userId,
-                            },
-                        },
-                    });
-
-                    if (!existingWsMember) {
-                        await tx.workspaceMember.create({
-                            data: {
-                                workspaceId: invite.workspaceId,
-                                userId,
-                                role: invite.role,
-                            },
-                        });
-                    }
-
-                    // Remove the invite after resolving
-                    await tx.pendingInvite.delete({
-                        where: { id: invite.id },
-                    });
-                });
-
-                resolved++;
-            } catch (error) {
-                logger.error('Failed to resolve invite', { inviteId: invite.id, error });
-            }
+        if (!invite || invite.email !== email) {
+            throw new NotFoundError('Invitation');
         }
 
-        logger.info(`Resolved ${resolved}/${invites.length} pending invites for ${email}`);
-        return resolved;
+        if (invite.expiresAt < new Date()) {
+            await this.prisma.pendingInvite.delete({ where: { id: invite.id } });
+            throw new AppError('Invitation has expired', 400, 'INVITE_EXPIRED');
+        }
+
+        const member = await this.prisma.$transaction(async (tx) => {
+            // Check if user is already a member
+            const existingMember = await tx.workspaceMember.findUnique({
+                where: {
+                    workspaceId_userId: {
+                        workspaceId: invite.workspaceId,
+                        userId,
+                    },
+                },
+            });
+
+            let newMember;
+            if (!existingMember) {
+                newMember = await tx.workspaceMember.create({
+                    data: {
+                        workspaceId: invite.workspaceId,
+                        userId,
+                        role: invite.role,
+                    },
+                });
+
+                await tx.auditLog.create({
+                    data: {
+                        userId,
+                        workspaceId: invite.workspaceId,
+                        action: AuditAction.MEMBER_INVITED,
+                        resource: 'workspace_member',
+                        resourceId: newMember.id,
+                        details: { acceptedInviteId: invite.id } as any,
+                    },
+                });
+            }
+
+            // Remove the invite
+            await tx.pendingInvite.delete({
+                where: { id: invite.id },
+            });
+
+            return existingMember || newMember;
+        });
+
+        logger.info(`User ${userId} accepted invite ${inviteId}`);
+        return member;
+    }
+
+    /**
+     * Explicitly decline an invitation.
+     */
+    async declineInvite(inviteId: string, email: string) {
+        const invite = await this.prisma.pendingInvite.findUnique({
+            where: { id: inviteId },
+        });
+
+        if (!invite || invite.email !== email) {
+            throw new NotFoundError('Invitation');
+        }
+
+        await this.prisma.$transaction(async (tx) => {
+            await tx.pendingInvite.delete({
+                where: { id: invite.id },
+            });
+
+            await tx.auditLog.create({
+                data: {
+                    userId: null,
+                    workspaceId: invite.workspaceId,
+                    action: 'INVITE_DECLINED',
+                    resource: 'pending_invite',
+                    resourceId: invite.id,
+                    details: { declinedByEmail: email } as any,
+                },
+            });
+        });
+
+        logger.info(`Email ${email} declined invite ${inviteId}`);
+        return { success: true };
     }
 
     /**
@@ -126,6 +164,26 @@ export class InvitesService {
             },
             include: {
                 workspace: { select: { id: true, name: true } },
+                invitedBy: { select: { id: true, firstName: true, lastName: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+    }
+
+    /**
+     * Get all pending invites for a specific workspace.
+     */
+    async getWorkspacePendingInvites(workspaceId: string) {
+        return this.prisma.pendingInvite.findMany({
+            where: {
+                workspaceId,
+                // Include both valid and expired (or just valid)
+                // Assuming admins might want to see all until they are deleted or resolved.
+                // Let's filter out trivially expired ones or show them?
+                // Let's just show active ones:
+                expiresAt: { gte: new Date() },
+            },
+            include: {
                 invitedBy: { select: { id: true, firstName: true, lastName: true, email: true } },
             },
             orderBy: { createdAt: 'desc' },
