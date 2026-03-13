@@ -54,6 +54,41 @@ export class MembersController {
         }
     }
 
+    async importMembers(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.membersService.importMembers(
+                req.params.workspaceId as string,
+                req.user.userId,
+                req.body
+            );
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: result.message,
+                data: result,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async getImportableMembers(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.membersService.getImportableMembers(
+                req.params.workspaceId as string,
+                req.user.userId
+            );
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Importable members retrieved successfully',
+                data: result,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
     async updateRole(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const member = await this.membersService.updateMemberRole(

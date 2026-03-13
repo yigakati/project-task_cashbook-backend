@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { MembersRepository } from './members.repository';
 import { NotFoundError, ConflictError, AuthorizationError, AppError } from '../../core/errors/AppError';
 import { AuditAction } from '../../core/types';
-import { InviteMemberDto, UpdateMemberRoleDto } from './members.dto';
+import { InviteMemberDto, UpdateMemberRoleDto, ImportMembersDto } from './members.dto';
 import { InvitesService } from '../invites/invites.service';
 import { sendEmail } from '../../config/email';
 import { workspaceInviteEmailTemplate, workspaceInviteSignupEmailTemplate } from '../../utils/emailTemplates';
@@ -117,6 +117,170 @@ export class MembersService {
         }
 
         return { invite, status: 'pending' as const };
+    }
+
+    async getImportableMembers(targetWorkspaceId: string, currentUserId: string) {
+        // 1. Get all members in the current workspace to filter them out
+        const targetMembers = await this.prisma.workspaceMember.findMany({
+            where: { workspaceId: targetWorkspaceId },
+            select: { userId: true },
+        });
+        const targetUserIds = new Set(targetMembers.map((m) => m.userId));
+
+        // 2. Find all other workspaces where current user is OWNER
+        const otherWorkspaces = await this.prisma.workspaceMember.findMany({
+            where: {
+                userId: currentUserId,
+                role: 'OWNER',
+                workspaceId: { not: targetWorkspaceId },
+            },
+            include: {
+                workspace: {
+                    select: { id: true, name: true, type: true },
+                },
+            },
+        });
+
+        const otherWorkspaceIds = otherWorkspaces.map((m) => m.workspaceId);
+
+        if (otherWorkspaceIds.length === 0) {
+            return [];
+        }
+
+        // 3. Find members in these other workspaces
+        const possibleMembers = await this.prisma.workspaceMember.findMany({
+            where: {
+                workspaceId: { in: otherWorkspaceIds },
+            },
+            include: {
+                user: {
+                    select: { id: true, firstName: true, lastName: true, email: true },
+                },
+            },
+        });
+
+        // 4. Group by workspace, filtering out those already in target
+        const importableByWorkspace = otherWorkspaces.map((ow) => {
+            const members = possibleMembers
+                .filter((pm) => 
+                    pm.workspaceId === ow.workspaceId 
+                    && pm.userId !== currentUserId 
+                    && !targetUserIds.has(pm.userId)
+                )
+                .map((pm) => ({
+                    userId: pm.user.id,
+                    firstName: pm.user.firstName,
+                    lastName: pm.user.lastName,
+                    email: pm.user.email,
+                    roleInSource: pm.role,
+                }));
+
+            return {
+                sourceWorkspaceId: ow.workspace.id,
+                sourceWorkspaceName: ow.workspace.name,
+                sourceWorkspaceType: ow.workspace.type,
+                importableMembers: members,
+            };
+        });
+
+        // Filter out workspaces that have 0 importable members
+        return importableByWorkspace.filter((w) => w.importableMembers.length > 0);
+    }
+
+    async importMembers(targetWorkspaceId: string, importingUserId: string, dto: ImportMembersDto) {
+        if (targetWorkspaceId === dto.sourceWorkspaceId) {
+            throw new AppError('Source and target workspaces must be different', 400, 'INVALID_OPERATION');
+        }
+
+        const sourceMembership = await this.prisma.workspaceMember.findUnique({
+            where: {
+                workspaceId_userId: {
+                    workspaceId: dto.sourceWorkspaceId,
+                    userId: importingUserId,
+                },
+            },
+        });
+
+        if (!sourceMembership || sourceMembership.role !== 'OWNER') {
+            throw new AuthorizationError('You must be the OWNER of the source workspace to import its members');
+        }
+
+        const targetMembership = await this.prisma.workspaceMember.findUnique({
+            where: {
+                workspaceId_userId: {
+                    workspaceId: targetWorkspaceId,
+                    userId: importingUserId,
+                },
+            },
+        });
+
+        if (!targetMembership || targetMembership.role !== 'OWNER') {
+            throw new AuthorizationError('You must be the OWNER of the target workspace to import members');
+        }
+
+        const userIdsToImport = dto.members.map(m => m.userId);
+
+        const validSourceMembers = await this.prisma.workspaceMember.findMany({
+            where: {
+                workspaceId: dto.sourceWorkspaceId,
+                userId: { in: userIdsToImport },
+            },
+        });
+
+        const validSourceUserIds = new Set(validSourceMembers.map(m => m.userId));
+
+        const existingTargetMembers = await this.prisma.workspaceMember.findMany({
+            where: {
+                workspaceId: targetWorkspaceId,
+                userId: { in: Array.from(validSourceUserIds) },
+            },
+        });
+
+        const existingTargetUserIds = new Set(existingTargetMembers.map(m => m.userId));
+
+        const newMembersToImport = dto.members.filter(m => 
+            validSourceUserIds.has(m.userId) && !existingTargetUserIds.has(m.userId)
+        );
+
+        if (newMembersToImport.length === 0) {
+            return { importedCount: 0, message: 'No new valid members found to import' };
+        }
+
+        const importedMembers = await this.prisma.$transaction(async (tx) => {
+            const added = [];
+            for (const m of newMembersToImport) {
+                const newMember = await tx.workspaceMember.create({
+                    data: {
+                        workspaceId: targetWorkspaceId,
+                        userId: m.userId,
+                        role: m.role,
+                    },
+                });
+                added.push(newMember);
+
+                await tx.auditLog.create({
+                    data: {
+                        userId: importingUserId,
+                        workspaceId: targetWorkspaceId,
+                        action: AuditAction.MEMBER_IMPORTED,
+                        resource: 'workspace_member',
+                        resourceId: newMember.id,
+                        details: {
+                            sourceWorkspaceId: dto.sourceWorkspaceId,
+                            importedUserId: m.userId,
+                            role: m.role,
+                        } as any,
+                    },
+                });
+            }
+            return added;
+        });
+
+        return {
+            importedCount: importedMembers.length,
+            members: importedMembers,
+            message: `Successfully imported ${importedMembers.length} member(s)`,
+        };
     }
 
     async updateMemberRole(

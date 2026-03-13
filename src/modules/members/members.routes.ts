@@ -4,7 +4,7 @@ import { MembersController } from './members.controller';
 import { authenticate } from '../../middlewares/authenticate';
 import { validate } from '../../middlewares/validate';
 import { requireWorkspaceMember } from '../../middlewares/authorize';
-import { inviteMemberSchema, updateMemberRoleSchema } from './members.dto';
+import { inviteMemberSchema, updateMemberRoleSchema, importMembersSchema } from './members.dto';
 import { WorkspaceRole } from '../../core/types';
 
 const router = Router({ mergeParams: true });
@@ -24,6 +24,21 @@ router.get(
     '/invites/pending',
     requireWorkspaceMember([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]) as any,
     membersController.getPendingInvites.bind(membersController) as any
+);
+
+// Get importable members from other workspaces
+router.get(
+    '/importable',
+    requireWorkspaceMember([WorkspaceRole.OWNER]) as any,
+    membersController.getImportableMembers.bind(membersController) as any
+);
+
+// Import members from another workspace
+router.post(
+    '/import',
+    requireWorkspaceMember([WorkspaceRole.OWNER]) as any,
+    validate(importMembersSchema),
+    membersController.importMembers.bind(membersController) as any
 );
 
 // Invite member
