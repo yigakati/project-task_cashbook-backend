@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -14,9 +14,10 @@ import {
 } from '../../core/errors/AppError';
 import { JwtPayload, AuditAction, WorkspaceType } from '../../core/types';
 import {
-    RegisterDto, LoginDto, ChangePasswordDto,
+    RegisterDto, LoginDto, ChangePasswordDto, SetupPasswordDto,
     VerifyEmailDto, ForgotPasswordDto, ResetPasswordDto,
     GoogleLoginDto,
+    OcLoginDto,
 } from './auth.dto';
 import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
@@ -25,6 +26,8 @@ import { verificationEmailTemplate, passwordResetEmailTemplate, welcomeEmailTemp
 
 const SUSPICIOUS_FAILURE_THRESHOLD = 5;
 const OTP_TTL_SECONDS = 15 * 60; // 15 minutes
+/** A hung OC server must not hang our request thread indefinitely. */
+const OC_REQUEST_TIMEOUT_MS = 10_000;
 
 @injectable()
 export class AuthService {
@@ -224,6 +227,344 @@ export class AuthService {
         };
     }
 
+    // ─── OC OAuth ────────────────────────────────────────────
+    /**
+     * Authorization-code exchange, unlike `googleLogin`.
+     *
+     * Google hands us a signed ID token the frontend already obtained; verifying
+     * it is a local signature check against Google's public keys, via a hardened
+     * SDK, and needs no outbound call of our own at request time. OC gives us
+     * only a one-time code, so THIS server has to make two outbound HTTP calls
+     * to a third party to turn it into a user — a different, larger trust
+     * surface than Google's flow, and the reason this method is more defensive
+     * than its sibling: a request timeout on both calls (a hung upstream must
+     * not hang ours), and an audit row on every distinct failure mode, not just
+     * the first one.
+     *
+     * `redirectUri` is not accepted from the caller at all. OC's OAuth app
+     * registration takes redirect URIs as a fixed list at app-creation time —
+     * `config.OC_REDIRECT_URI` is the one value that will ever be valid for
+     * this app — so there is nothing to validate: the server always sends its
+     * own known-correct value rather than trusting client input.
+     */
+    /**
+     * Shared by `googleLogin` and `ocLogin` — resolving "which user does this
+     * OAuth identity belong to" is identical for both providers, and used to
+     * be duplicated per-provider logic that mutated `User.provider`/
+     * `providerId` directly. That single-slot design meant linking a second
+     * provider silently overwrote the first: a user who signed up with
+     * Google, then signed in with OC using the same email, would have their
+     * `provider` column flipped to `OC` — and a subsequent Google sign-in
+     * would no longer find them by `(GOOGLE, googleSub)`, re-triggering the
+     * "existing account" match by email and flipping it right back. Only
+     * whichever provider was used most recently actually worked.
+     *
+     * `LinkedIdentity` fixes this by giving every provider its own row, so a
+     * user can have both linked simultaneously. `User.provider`/`providerId`
+     * are left untouched here — they stay whatever they were at original
+     * signup, an immutable record for display/audit, not a login path.
+     */
+    private async resolveOAuthUser(
+        tx: Prisma.TransactionClient,
+        params: {
+            provider: AuthProvider;
+            providerId: string;
+            email: string;
+            firstName: string;
+            lastName: string;
+            linkedAction: AuditAction;
+            createdAction: AuditAction;
+            ipAddress?: string;
+            userAgent?: string;
+        },
+    ) {
+        const { provider, providerId, email, firstName, lastName, linkedAction, createdAction, ipAddress, userAgent } = params;
+
+        // Case A: this exact provider identity is already linked to someone.
+        const existingIdentity = await tx.linkedIdentity.findUnique({
+            where: { provider_providerId: { provider, providerId } },
+            include: { user: true },
+        });
+
+        if (existingIdentity) {
+            if (!existingIdentity.user.isActive) {
+                throw new AuthenticationError('Account is deactivated');
+            }
+            return { user: existingIdentity.user, isNewUser: false };
+        }
+
+        // Case B: no link yet, but a user already exists with this email —
+        // via local signup or a different provider. Link this identity to
+        // them rather than creating a second account or overwriting theirs.
+        const existingUser = await tx.user.findUnique({ where: { email } });
+
+        if (existingUser) {
+            if (!existingUser.isActive) {
+                throw new AuthenticationError('Account is deactivated');
+            }
+
+            if (!existingUser.emailVerified) {
+                throw new AppError(
+                    'An account with this email exists but is not verified. Please verify your email first.',
+                    403,
+                    'EMAIL_NOT_VERIFIED',
+                );
+            }
+
+            await tx.linkedIdentity.create({
+                data: { userId: existingUser.id, provider, providerId, email },
+            });
+
+            await tx.auditLog.create({
+                data: {
+                    userId: existingUser.id,
+                    action: linkedAction,
+                    resource: 'user',
+                    resourceId: existingUser.id,
+                    details: { providerId } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+
+            return { user: existingUser, isNewUser: false };
+        }
+
+        // Case C: brand new user.
+        const newUser = await tx.user.create({
+            data: {
+                email,
+                firstName,
+                lastName,
+                provider,
+                providerId,
+                emailVerified: true,
+                isSuperAdmin: superAdminEmails().includes(email.toLowerCase()),
+            },
+        });
+
+        await tx.linkedIdentity.create({
+            data: { userId: newUser.id, provider, providerId, email },
+        });
+
+        await tx.workspace.create({
+            data: {
+                name: `${firstName}'s Personal`,
+                type: WorkspaceType.PERSONAL,
+                ownerId: newUser.id,
+            },
+        });
+
+        await tx.auditLog.create({
+            data: {
+                userId: newUser.id,
+                action: createdAction,
+                resource: 'user',
+                resourceId: newUser.id,
+                details: { providerId, email } as any,
+                ipAddress,
+                userAgent,
+            },
+        });
+
+        return { user: newUser, isNewUser: true };
+    }
+
+    async ocLogin(dto: OcLoginDto, ipAddress?: string, userAgent?: string) {
+        if (!config.Client_ID || !config.Client_Secret) {
+            throw new AppError(
+                'OC sign-in is not configured on this server',
+                503,
+                'OC_AUTH_NOT_CONFIGURED',
+            );
+        }
+
+        let tokens: any;
+        try {
+            const tokenRes = await fetch(`${config.OC_BASE_URL}/api/oauth/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    grant_type: 'authorization_code',
+                    client_id: config.Client_ID,
+                    client_secret: config.Client_Secret,
+                    code: dto.code,
+                    // Not client input. OC's OAuth app registration takes
+                    // redirect URIs as a fixed list at creation time — there is
+                    // exactly one value that was ever going to be valid, so the
+                    // server supplies it rather than trusting a caller to send
+                    // back the same one it was handed. This also means the
+                    // token exchange can never be pointed at a URI the app was
+                    // not actually registered with, regardless of what any
+                    // caller of this endpoint sends.
+                    redirect_uri: config.OC_REDIRECT_URI,
+                }),
+                signal: AbortSignal.timeout(OC_REQUEST_TIMEOUT_MS),
+            });
+
+            if (!tokenRes.ok) {
+                const body = await tokenRes.text().catch(() => '');
+                logger.error('OC token exchange rejected', { status: tokenRes.status, body });
+                throw new Error(`OC token endpoint returned ${tokenRes.status}`);
+            }
+            tokens = await tokenRes.json();
+        } catch (error) {
+            logger.error('OC token exchange failed', {
+                error: error instanceof Error ? error.message : error,
+            });
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.OC_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'Invalid OC authorization code' } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Invalid OC authorization code');
+        }
+
+        if (!tokens.access_token) {
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.OC_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'OC token response carried no access_token' } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Invalid OC authorization response');
+        }
+
+        let payload: any;
+        try {
+            const userRes = await fetch(`${config.OC_BASE_URL}/api/oauth/userinfo`, {
+                headers: { Authorization: `Bearer ${tokens.access_token}` },
+                signal: AbortSignal.timeout(OC_REQUEST_TIMEOUT_MS),
+            });
+            if (!userRes.ok) {
+                const body = await userRes.text().catch(() => '');
+                logger.error('OC userinfo request rejected', { status: userRes.status, body });
+                throw new Error(`OC userinfo endpoint returned ${userRes.status}`);
+            }
+            payload = await userRes.json();
+        } catch (error) {
+            logger.error('OC userinfo fetch failed', {
+                error: error instanceof Error ? error.message : error,
+            });
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.OC_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'Failed to fetch OC user info' } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Failed to fetch OC user info');
+        }
+
+        // The docs describe the identity field only as "ID"; `sub` is the
+        // OIDC-standard name for it (the requested scope includes `openid`),
+        // but `id` is accepted too rather than trusting OC's userinfo response
+        // to be byte-for-byte spec-compliant on a field we never got a schema
+        // for.
+        const ocSub = payload?.sub ?? payload?.id;
+        if (!payload || !ocSub || !payload.email) {
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.OC_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'Invalid OC user payload' } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Invalid OC user payload');
+        }
+
+        const email = payload.email;
+        const firstName = payload.given_name || payload.name?.split(' ')[0] || 'User';
+        const lastName = payload.family_name || payload.name?.split(' ').slice(1).join(' ') || '';
+        const isEmailVerified = payload.email_verified !== false; // Assuming verified unless explicitly false
+
+        if (!isEmailVerified) {
+            await this.prisma.auditLog.create({
+                data: {
+                    action: AuditAction.OC_LOGIN_FAILED,
+                    resource: 'auth',
+                    details: { reason: 'OC email not verified', email } as any,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            throw new AuthenticationError('Your OC email is not verified');
+        }
+
+        // Resolve user inside a transaction
+        const { user, isNewUser } = await this.prisma.$transaction((tx) =>
+            this.resolveOAuthUser(tx, {
+                provider: AuthProvider.OC,
+                providerId: ocSub,
+                email,
+                firstName,
+                lastName,
+                linkedAction: AuditAction.OC_ACCOUNT_LINKED,
+                createdAction: AuditAction.OC_ACCOUNT_CREATED,
+                ipAddress,
+                userAgent,
+            }),
+        );
+
+        if (isNewUser) {
+            sendEmail({
+                to: user.email,
+                subject: `Welcome to ${config.APP_NAME}!`,
+                html: welcomeEmailTemplate(user.firstName),
+            }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
+        }
+
+        // Generate tokens
+        const accessToken = this.generateAccessToken(user);
+        const { token: refreshToken, hash: refreshTokenHash } = this.generateRefreshToken();
+        const refreshExpiresAt = this.parseExpiryToDate(config.JWT_REFRESH_EXPIRY);
+
+        await this.authRepository.createRefreshToken({
+            userId: user.id,
+            tokenHash: refreshTokenHash,
+            deviceInfo: userAgent,
+            ipAddress,
+            expiresAt: refreshExpiresAt,
+        });
+
+        await this.authRepository.updateUserLastLogin(user.id);
+        await this.authRepository.createLoginHistory({
+            userId: user.id,
+            ipAddress,
+            userAgent,
+            status: 'SUCCESS',
+        });
+
+        // Log activity outside transaction
+        await this.prisma.auditLog.create({
+            data: {
+                userId: user.id,
+                action: AuditAction.OC_LOGIN_SUCCESS,
+                resource: 'auth',
+                ipAddress,
+                userAgent,
+            },
+        });
+
+        const { passwordHash: _, ...userWithoutPassword } = user;
+        return {
+            user: userWithoutPassword,
+            accessToken,
+            refreshToken,
+        };
+    }
+
     // ─── Refresh Token ────────────────────────────────
     async refreshTokens(oldRefreshToken: string, ipAddress?: string, userAgent?: string) {
         const tokenHash = this.hashToken(oldRefreshToken);
@@ -319,7 +660,11 @@ export class AuthService {
         }
 
         if (!user.passwordHash) {
-            throw new AppError('Password change is not available for Google-authenticated accounts', 400, 'NO_PASSWORD');
+            throw new AppError(
+                'This account has no password yet — set one up first, then you can change it.',
+                400,
+                'NO_PASSWORD',
+            );
         }
 
         const isValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
@@ -332,6 +677,39 @@ export class AuthService {
 
         // Revoke all refresh tokens for security
         await this.authRepository.revokeAllUserTokens(userId);
+    }
+
+    /**
+     * For accounts that reached this app entirely through Google/OC and have
+     * no password at all — distinct from `changePassword` because there is no
+     * "current password" to verify. Once a password exists, this account
+     * uses `changePassword` instead; this method refuses to overwrite an
+     * existing hash so it can never be used to bypass that check.
+     */
+    async setupPassword(userId: string, dto: SetupPasswordDto) {
+        const user = await this.authRepository.findUserById(userId);
+        if (!user) {
+            throw new AuthenticationError('User not found');
+        }
+
+        if (user.passwordHash) {
+            throw new AppError(
+                'This account already has a password — use change password instead.',
+                400,
+                'PASSWORD_ALREADY_SET',
+            );
+        }
+
+        const newHash = await bcrypt.hash(dto.newPassword, config.BCRYPT_SALT_ROUNDS);
+        await this.authRepository.updateUserPassword(userId, newHash);
+
+        await this.prisma.auditLog.create({
+            data: {
+                userId,
+                action: AuditAction.PASSWORD_SETUP_COMPLETED,
+                resource: 'auth',
+            },
+        });
     }
 
     // ─── Login History ─────────────────────────────────
@@ -586,106 +964,20 @@ export class AuthService {
         const firstName = payload.given_name || payload.name?.split(' ')[0] || 'User';
         const lastName = payload.family_name || payload.name?.split(' ').slice(1).join(' ') || '';
 
-        let isNewUser = false;
         // Resolve user inside a transaction
-        const user = await this.prisma.$transaction(async (tx) => {
-            // Case A: Existing Google user
-            const existingGoogleUser = await tx.user.findUnique({
-                where: {
-                    provider_providerId: {
-                        provider: AuthProvider.GOOGLE,
-                        providerId: googleSub,
-                    },
-                },
-            });
-
-            if (existingGoogleUser) {
-                if (!existingGoogleUser.isActive) {
-                    throw new AuthenticationError('Account is deactivated');
-                }
-                return existingGoogleUser;
-            }
-
-            // Case B: Existing LOCAL user with same email
-            const existingLocalUser = await tx.user.findUnique({
-                where: { email },
-            });
-
-            if (existingLocalUser) {
-                if (!existingLocalUser.isActive) {
-                    throw new AuthenticationError('Account is deactivated');
-                }
-
-                if (!existingLocalUser.emailVerified) {
-                    throw new AppError(
-                        'A local account with this email exists but is not verified. Please verify your email first.',
-                        403,
-                        'EMAIL_NOT_VERIFIED'
-                    );
-                }
-
-                // Link Google to existing verified LOCAL account
-                const linked = await tx.user.update({
-                    where: { id: existingLocalUser.id },
-                    data: {
-                        provider: AuthProvider.GOOGLE,
-                        providerId: googleSub,
-                    },
-                });
-
-                await tx.auditLog.create({
-                    data: {
-                        userId: linked.id,
-                        action: AuditAction.GOOGLE_ACCOUNT_LINKED,
-                        resource: 'user',
-                        resourceId: linked.id,
-                        details: { googleSub } as any,
-                        ipAddress,
-                        userAgent,
-                    },
-                });
-
-                return linked;
-            }
-
-            // Case C: Brand new Google user
-            const newUser = await tx.user.create({
-                data: {
-                    email,
-                    firstName,
-                    lastName,
-                    provider: AuthProvider.GOOGLE,
-                    providerId: googleSub,
-                    emailVerified: true,
-                    isSuperAdmin: superAdminEmails().includes(email.toLowerCase()),
-                },
-            });
-
-            // Auto-create personal workspace
-            await tx.workspace.create({
-                data: {
-                    name: `${firstName}'s Personal`,
-                    type: WorkspaceType.PERSONAL,
-                    ownerId: newUser.id,
-                },
-            });
-
-            await tx.auditLog.create({
-                data: {
-                    userId: newUser.id,
-                    action: AuditAction.GOOGLE_ACCOUNT_CREATED,
-                    resource: 'user',
-                    resourceId: newUser.id,
-                    details: { googleSub, email } as any,
-                    ipAddress,
-                    userAgent,
-                },
-            });
-
-            isNewUser = true;
-
-            return newUser;
-        });
+        const { user, isNewUser } = await this.prisma.$transaction((tx) =>
+            this.resolveOAuthUser(tx, {
+                provider: AuthProvider.GOOGLE,
+                providerId: googleSub,
+                email,
+                firstName,
+                lastName,
+                linkedAction: AuditAction.GOOGLE_ACCOUNT_LINKED,
+                createdAction: AuditAction.GOOGLE_ACCOUNT_CREATED,
+                ipAddress,
+                userAgent,
+            }),
+        );
 
         if (isNewUser) {
             sendEmail({

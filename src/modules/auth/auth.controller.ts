@@ -145,6 +145,24 @@ export class AuthController {
         }
     }
 
+    async setupPassword(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            await this.authService.setupPassword(req.user.userId, req.body);
+
+            // Unlike changePassword, nothing here needs to force re-login —
+            // there was no prior password whose compromise this closes off,
+            // and the current session's credentials are unaffected.
+            const response: ApiResponse = {
+                success: true,
+                message: 'Password set up successfully.',
+            };
+
+            res.status(StatusCodes.OK).json(response);
+        } catch (error) {
+            next(error);
+        }
+    }
+
     async getLoginHistory(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const history = await this.authService.getLoginHistory(req.user.userId);
@@ -225,6 +243,29 @@ export class AuthController {
             const response: ApiResponse = {
                 success: true,
                 message: 'Google login successful',
+                data: { user: result.user },
+            };
+
+            res.status(StatusCodes.OK).json(response);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    // ─── OC OAuth ───────────────────────────────────────
+    async ocLogin(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.authService.ocLogin(
+                req.body,
+                req.ip,
+                req.get('user-agent')
+            );
+
+            setAuthCookies(res, result.accessToken, result.refreshToken);
+
+            const response: ApiResponse = {
+                success: true,
+                message: 'OC login successful',
                 data: { user: result.user },
             };
 

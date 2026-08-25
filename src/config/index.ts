@@ -71,6 +71,25 @@ const envSchema = z.object({
 
     GOOGLE_CLIENT_ID: z.string().default(''),
 
+    /**
+     * OC (OpenChat) OAuth. Names kept exactly as they already exist in this
+     * deployment's `.env` — unconventional casing for a shell var, but renaming
+     * would mean every environment's `.env` has to be edited in lockstep with
+     * this file, and getting that out of sync silently breaks the login route
+     * rather than failing loudly at boot the way an unset required var does.
+     */
+    Client_ID: z.string().default(''),
+    Client_Secret: z.string().default(''),
+    OC_BASE_URL: z.string().url().default('https://oc.odixtec.net'),
+    /**
+     * The one redirect URI registered against this OC OAuth app. OC's
+     * dashboard takes redirect URIs at app-creation time as a fixed list, not
+     * something a client can vary per-request — so this is not configuration
+     * we accept from the frontend, only a value the server supplies itself
+     * when exchanging a code. See auth.service.ts#ocLogin.
+     */
+    OC_REDIRECT_URI: z.string().url().default('https://inchange.odixtec.net/auth/callback'),
+
     CF_R2_ACCOUNT_ID: z.string().min(1, 'CF_R2_ACCOUNT_ID is required').default('dummy_account_id'),
     CF_R2_ACCESS_KEY_ID: z.string().min(1, 'CF_R2_ACCESS_KEY_ID is required').default('dummy_key_id'),
     CF_R2_SECRET_ACCESS_KEY: z.string().min(1, 'CF_R2_SECRET_ACCESS_KEY is required').default('dummy_secret'),

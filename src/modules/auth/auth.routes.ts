@@ -8,11 +8,13 @@ import {
     registerSchema,
     loginSchema,
     changePasswordSchema,
+    setupPasswordSchema,
     verifyEmailSchema,
     resendVerificationSchema,
     forgotPasswordSchema,
     resetPasswordSchema,
     googleLoginSchema,
+    ocLoginSchema,
 } from './auth.dto';
 
 const router = Router();
@@ -45,6 +47,14 @@ router.post(
     authRateLimiter,
     validate(googleLoginSchema),
     authController.googleLogin.bind(authController) as any
+);
+
+// OC OAuth
+router.post(
+    '/oc',
+    authRateLimiter,
+    validate(ocLoginSchema),
+    authController.ocLogin.bind(authController) as any
 );
 
 // Email verification
@@ -95,6 +105,16 @@ router.post(
     authenticate as any,
     validate(changePasswordSchema),
     authController.changePassword.bind(authController) as any
+);
+
+// For Google/OC-only accounts that have no password yet — see
+// AuthService#setupPassword for why this is a separate endpoint from
+// change-password rather than a variant of it.
+router.post(
+    '/setup-password',
+    authenticate as any,
+    validate(setupPasswordSchema),
+    authController.setupPassword.bind(authController) as any
 );
 
 router.get(

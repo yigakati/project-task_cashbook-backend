@@ -77,12 +77,41 @@ model User {
   membershipsIssued     Membership[]            @relation("MembershipIssuer")
   apiKeysCreated        ApiKey[]                @relation("ApiKeyCreator")
   apiKeysRevoked        ApiKey[]                @relation("ApiKeyRevoker")
+  linkedIdentities      LinkedIdentity[]
 
   @@unique([provider, providerId])
   @@map("users")
 }
 
 // ─── Auth ──────────────────────────────────────────────
+
+/**
+ * One row per OAuth identity linked to a user — the actual source of truth
+ * for "can this Google/OC account sign this person in", queried instead of
+ * `User.provider`/`User.providerId` wherever login resolves an identity.
+ *
+ * `User.provider`/`providerId` stay as a single, immutable record of how the
+ * account was originally created (useful for display/audit) but are never
+ * mutated after signup — mutating them to "the most recently used provider"
+ * is exactly the bug this table replaces: a single-slot column can't
+ * represent a user who signed up locally, then linked Google, then also
+ * linked OC. Every provider a user has ever authenticated with — including
+ * their original signup provider — gets a row here.
+ */
+model LinkedIdentity {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @map("user_id") @db.Uuid
+  provider   AuthProvider
+  providerId String       @map("provider_id")
+  email      String
+  linkedAt   DateTime     @default(now()) @map("linked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerId])
+  @@index([userId])
+  @@map("linked_identities")
+}
 
 model RefreshToken {
   id         String   @id @default(uuid()) @db.Uuid
@@ -1004,6 +1033,7 @@ enum TransactionSourceType {
 enum AuthProvider {
   LOCAL
   GOOGLE
+  OC
 }
 
 // ─── Inventory Subsystem ────────────────────────────────

@@ -12,7 +12,7 @@ export class UsersService {
         if (!user) {
             throw new NotFoundError('User');
         }
-        return user;
+        return this.toProfileResponse(user);
     }
 
     async updateProfile(userId: string, dto: UpdateProfileDto) {
@@ -21,6 +21,24 @@ export class UsersService {
             throw new NotFoundError('User');
         }
 
-        return this.usersRepository.updateProfile(userId, dto);
+        const updated = await this.usersRepository.updateProfile(userId, dto);
+        return this.toProfileResponse(updated);
+    }
+
+    /**
+     * `hasPassword` and `linkedProviders` are what the account-settings page
+     * uses to decide "set up password" vs. "change password", and to show
+     * which of Google/OC are connected — never the raw hash or the
+     * join-table shape.
+     */
+    private toProfileResponse<T extends { passwordHash: string | null; linkedIdentities: { provider: string }[] }>(
+        user: T,
+    ) {
+        const { passwordHash, linkedIdentities, ...rest } = user;
+        return {
+            ...rest,
+            hasPassword: Boolean(passwordHash),
+            linkedProviders: linkedIdentities.map((identity) => identity.provider),
+        };
     }
 }

@@ -117,22 +117,4 @@ export class AuthRepository {
         });
     }
 
-    // ─── Google OAuth ─────────────────────────────────
-    async findUserByProviderId(provider: AuthProvider, providerId: string) {
-        return this.prisma.user.findUnique({
-            where: {
-                provider_providerId: { provider, providerId },
-            },
-        });
-    }
-
-    async linkGoogleAccount(userId: string, providerId: string) {
-        return this.prisma.user.update({
-            where: { id: userId },
-            data: {
-                provider: AuthProvider.GOOGLE,
-                providerId,
-            },
-        });
-    }
 }
