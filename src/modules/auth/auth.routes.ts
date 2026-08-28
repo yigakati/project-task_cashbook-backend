@@ -123,4 +123,18 @@ router.get(
     authController.getLoginHistory.bind(authController) as any
 );
 
+router.post(
+    '/connect/google',
+    authenticate as any,
+    validate(googleLoginSchema),
+    authController.connectGoogle.bind(authController) as any
+);
+
+router.post(
+    '/connect/oc',
+    authenticate as any,
+    validate(ocLoginSchema),
+    authController.connectOc.bind(authController) as any
+);
+
 export default router;

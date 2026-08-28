@@ -1025,4 +1025,138 @@ export class AuthService {
             refreshToken,
         };
     }
+    // ─── OAuth Connection ──────────────────────────────────────
+    async connectGoogle(userId: string, dto: GoogleLoginDto, ipAddress?: string, userAgent?: string) {
+        const googleClient = new OAuth2Client();
+        let payload;
+        try {
+            const ticket = await googleClient.verifyIdToken({
+                idToken: dto.idToken,
+                audience: config.GOOGLE_CLIENT_ID,
+            });
+            payload = ticket.getPayload();
+        } catch (error) {
+            throw new AuthenticationError('Invalid Google token');
+        }
+
+        const googleSub = payload?.sub;
+        if (!payload || !googleSub || !payload.email) {
+            throw new AuthenticationError('Invalid Google user payload');
+        }
+
+        const existingLink = await this.prisma.linkedIdentity.findUnique({
+            where: { provider_providerId: { provider: AuthProvider.GOOGLE, providerId: googleSub } },
+        });
+
+        if (existingLink && existingLink.userId !== userId) {
+            throw new ConflictError('This Google account is already connected to another user');
+        }
+
+        if (!existingLink) {
+            await this.prisma.linkedIdentity.create({
+                data: {
+                    userId,
+                    provider: AuthProvider.GOOGLE,
+                    providerId: googleSub,
+                    email: payload.email,
+                },
+            });
+        }
+
+        await this.prisma.auditLog.create({
+            data: {
+                userId,
+                action: AuditAction.GOOGLE_ACCOUNT_LINKED,
+                resource: 'user',
+                resourceId: userId,
+                details: { connected: 'GOOGLE' } as any,
+                ipAddress,
+                userAgent,
+            },
+        });
+
+        const user = await this.prisma.user.findUnique({ where: { id: userId } });
+        const { passwordHash: _, ...userWithoutPassword } = user!;
+        return userWithoutPassword;
+    }
+
+    async connectOc(userId: string, dto: OcLoginDto, ipAddress?: string, userAgent?: string) {
+        const OC_BASE = 'https://oc.odixtec.net';
+        
+        let tokenData: any;
+        try {
+            const tokenRes = await fetch(`${OC_BASE}/api/oauth/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    grant_type: 'authorization_code',
+                    client_id: config.Client_ID,
+                    client_secret: config.Client_Secret,
+                    redirect_uri: config.OC_REDIRECT_URI,
+                    code: dto.code,
+                }),
+                signal: AbortSignal.timeout(OC_REQUEST_TIMEOUT_MS),
+            });
+            if (!tokenRes.ok) {
+                throw new Error('OC token exchange failed');
+            }
+            tokenData = await tokenRes.json();
+        } catch (error) {
+            throw new AuthenticationError('Failed to exchange OC code');
+        }
+
+        let payload: any;
+        try {
+            const userRes = await fetch(`${OC_BASE}/api/oauth/userinfo`, {
+                headers: { Authorization: `Bearer ${tokenData.access_token}` },
+                signal: AbortSignal.timeout(OC_REQUEST_TIMEOUT_MS),
+            });
+            if (!userRes.ok) {
+                throw new Error('OC userinfo failed');
+            }
+            payload = await userRes.json();
+        } catch (error) {
+            throw new AuthenticationError('Failed to fetch OC user info');
+        }
+
+        const ocSub = payload?.sub ?? payload?.id;
+        if (!payload || !ocSub || !payload.email) {
+            throw new AuthenticationError('Invalid OC user payload');
+        }
+
+        const existingLink = await this.prisma.linkedIdentity.findUnique({
+            where: { provider_providerId: { provider: AuthProvider.OC, providerId: ocSub.toString() } },
+        });
+
+        if (existingLink && existingLink.userId !== userId) {
+            throw new ConflictError('This OC account is already connected to another user');
+        }
+
+        if (!existingLink) {
+            await this.prisma.linkedIdentity.create({
+                data: {
+                    userId,
+                    provider: AuthProvider.OC,
+                    providerId: ocSub.toString(),
+                    email: payload.email,
+                },
+            });
+        }
+
+        await this.prisma.auditLog.create({
+            data: {
+                userId,
+                action: AuditAction.OC_ACCOUNT_LINKED,
+                resource: 'user',
+                resourceId: userId,
+                details: { connected: 'OC' } as any,
+                ipAddress,
+                userAgent,
+            },
+        });
+
+        const user = await this.prisma.user.findUnique({ where: { id: userId } });
+        const { passwordHash: _, ...userWithoutPassword } = user!;
+        return userWithoutPassword;
+    }
 }

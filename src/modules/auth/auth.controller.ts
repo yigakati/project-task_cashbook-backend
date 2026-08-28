@@ -274,6 +274,34 @@ export class AuthController {
             next(error);
         }
     }
+
+    async connectGoogle(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const user = await this.authService.connectGoogle(
+                req.user.userId,
+                req.body,
+                req.ip,
+                req.get('user-agent')
+            );
+            res.status(StatusCodes.OK).json({ success: true, message: 'Google account connected', data: { user } });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async connectOc(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const user = await this.authService.connectOc(
+                req.user.userId,
+                req.body,
+                req.ip,
+                req.get('user-agent')
+            );
+            res.status(StatusCodes.OK).json({ success: true, message: 'OC account connected', data: { user } });
+        } catch (error) {
+            next(error);
+        }
+    }
 }
 
 // ─── Cookie Helpers ────────────────────────────────────

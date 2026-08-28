@@ -12,7 +12,7 @@
  *   not track overtime still records the minutes, so an approval weeks later
  *   can turn them into counted time rather than finding nothing to count.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
 import { WorkspaceRole } from '@prisma/client';
 import { resetDatabase, testPrisma } from '../setup';
 import { resolveService } from '../container';
@@ -61,6 +61,11 @@ async function fixture() {
 }
 
 beforeEach(async () => {
+    // Lock the time so lateFixture is reliably "late" (e.g. 15:00 UTC = 18:00 Kampala, 
+    // which is 18 hours after 00:01 local time).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-09T15:00:00Z'));
+
     await resetDatabase();
     clearClockCache();
 });
