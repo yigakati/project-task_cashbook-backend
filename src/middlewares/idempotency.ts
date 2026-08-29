@@ -105,9 +105,9 @@ export function idempotency(endpoint: string, mode: IdempotencyMode = 'warn') {
 
         // Claim. The unique index makes this atomic: exactly one concurrent
         // request wins and runs the handler.
-        let claimed = false;
+        let claimedId: string | null = null;
         try {
-            await prisma.idempotencyRecord.create({
+            const claim = await prisma.idempotencyRecord.create({
                 data: {
                     workspaceId,
                     userId,
@@ -118,7 +118,7 @@ export function idempotency(endpoint: string, mode: IdempotencyMode = 'warn') {
                     expiresAt: new Date(Date.now() + RETENTION_HOURS * 3600_000),
                 },
             });
-            claimed = true;
+            claimedId = claim.id;
         } catch (error) {
             const code = (error as { code?: string }).code;
             if (code !== 'P2002') {
@@ -127,10 +127,21 @@ export function idempotency(endpoint: string, mode: IdempotencyMode = 'warn') {
             }
         }
 
-        if (!claimed) {
-            const existing = await prisma.idempotencyRecord.findUnique({
-                where: { workspaceId_endpoint_key: { workspaceId, endpoint, key } },
-            });
+        if (!claimedId) {
+            // Person-scoped endpoints (no workspace in scope, e.g. peer link
+            // acceptance) claim with workspaceId NULL, which Postgres treats as
+            // distinct in the unique index — their claims never collide, so a
+            // P2002 here implies a workspace-scoped key. findUnique's compound
+            // key cannot carry NULL; findFirst with IS NULL covers the swept
+            // edge just in case a record exists.
+            const existing = workspaceId
+                ? await prisma.idempotencyRecord.findUnique({
+                    where: { workspaceId_endpoint_key: { workspaceId, endpoint, key } },
+                })
+                : await prisma.idempotencyRecord.findFirst({
+                    where: { workspaceId: null, endpoint, key },
+                    orderBy: { claimedAt: 'asc' },
+                });
 
             if (!existing) {
                 // Swept between the failed insert and this read; treat as fresh.
@@ -177,8 +188,13 @@ export function idempotency(endpoint: string, mode: IdempotencyMode = 'warn') {
             void (async () => {
                 try {
                     if (status >= 200 && status < 300) {
+                        // Settle by the record's own id rather than the
+                        // (workspaceId, endpoint, key) compound: the compound
+                        // requires a non-null workspaceId, and person-scoped
+                        // endpoints — peer link acceptance and settlement
+                        // decisions — have none.
                         await prisma.idempotencyRecord.update({
-                            where: { workspaceId_endpoint_key: { workspaceId, endpoint, key } },
+                            where: { id: claimedId! },
                             data: {
                                 state: 'COMPLETED',
                                 responseStatus: status,
@@ -189,7 +205,7 @@ export function idempotency(endpoint: string, mode: IdempotencyMode = 'warn') {
                     } else {
                         // Failed request: drop the claim so the client can genuinely retry.
                         await prisma.idempotencyRecord.deleteMany({
-                            where: { workspaceId, endpoint, key, state: 'IN_PROGRESS' },
+                            where: { id: claimedId!, state: 'IN_PROGRESS' },
                         });
                     }
                 } catch (error) {

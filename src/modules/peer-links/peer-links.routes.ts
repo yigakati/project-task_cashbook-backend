@@ -1,8 +1,10 @@
-import { Router } from 'express';
+import { Router, NextFunction, Request, Response } from 'express';
 import { container } from 'tsyringe';
 import { PeerLinksController } from './peer-links.controller';
 import { authenticate } from '../../middlewares/authenticate';
 import { requireCashbookMember, requireWorkspaceMember } from '../../middlewares/authorize';
+import { getPrismaClient } from '../../config/database';
+import { NotFoundError } from '../../core/errors/AppError';
 import { CashbookPermission } from '../../core/types/permissions';
 import { validateMultiple } from '../../middlewares/validate';
 import { idempotency } from '../../middlewares/idempotency';
@@ -64,9 +66,25 @@ peerLinksRouter.get('/:peerLinkId/acceptable-cashbooks',
     controller.getAcceptableCashbooks.bind(controller) as any,
 );
 
+/**
+ * The accept URL names no cashbook — the counterparty's chosen book arrives in
+ * the body. Copy it into params (the same move requireEntryAccess makes when a
+ * route names an entry instead of its book) so requireCashbookMember enforces
+ * book-level authority AND resolves the workspace the idempotency middleware
+ * keys its record on. Without a workspace scope the claim would be keyed on
+ * NULL, which Postgres treats as always-distinct — no replay protection.
+ */
+const cashbookIdFromBody = (req: Request, _res: Response, next: NextFunction) => {
+    // respondPeerLinkSchema guarantees a uuid; the validate step runs first.
+    req.params.cashbookId = (req.body as { cashbookId?: string }).cashbookId as string;
+    next();
+};
+
 peerLinksRouter.post('/:peerLinkId/accept',
-    idempotency('POST /peer-links/:peerLinkId/accept') as any,
     validateMultiple({ body: respondPeerLinkSchema }),
+    cashbookIdFromBody,
+    requireCashbookMember(CashbookPermission.MANAGE_OBLIGATIONS) as any,
+    idempotency('POST /peer-links/:peerLinkId/accept') as any,
     controller.acceptPeerLink.bind(controller) as any,
 );
 
@@ -80,9 +98,31 @@ peerLinksRouter.post('/:peerLinkId/cancel',
     controller.cancelPeerLink.bind(controller) as any,
 );
 
+/**
+ * Settlement decisions are party-checked in the service, not by a book guard —
+ * the counterparty owes no membership in the recorder's workspace. But the
+ * idempotency record still needs a workspace to key on, so resolve the
+ * recording entry's workspace here. Who may decide stays in the service.
+ */
+const settlementWorkspace = async (req: Request, _res: Response, next: NextFunction) => {
+    try {
+        const settlement = await getPrismaClient().peerLinkSettlement.findUnique({
+            where: { id: req.params.settlementId as string },
+            select: { entry: { select: { cashbook: { select: { workspaceId: true } } } } },
+        });
+        if (!settlement) throw new NotFoundError('Settlement');
+        (req as Request & { workspaceId?: string }).workspaceId =
+            settlement.entry.cashbook.workspaceId;
+        next();
+    } catch (error) {
+        next(error as Error);
+    }
+};
+
 peerLinksRouter.post('/settlements/:settlementId/decision',
-    idempotency('POST /peer-links/settlements/:settlementId/decision') as any,
     validateMultiple({ body: settlementDecisionSchema }),
+    settlementWorkspace,
+    idempotency('POST /peer-links/settlements/:settlementId/decision') as any,
     controller.decideSettlement.bind(controller) as any,
 );
 

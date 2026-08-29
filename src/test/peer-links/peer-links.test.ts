@@ -432,6 +432,16 @@ describe('peer link listing and lookup', () => {
             .rejects.toMatchObject({ code: 'USER_NOT_FOUND' });
     });
 
+    it('acceptable cashbooks answer empty once the link is decided, not a 400', async () => {
+        const f = await fixture();
+        const { accepted } = await acceptedLoan(f);
+
+        // The dialog's own refetch races the accept success that invalidated
+        // it — a decided link must answer gracefully.
+        const books: any = await peerLinks().getAcceptableCashbooks(accepted.id, f.bob.id);
+        expect(books.data).toEqual([]);
+    });
+
     it('acceptable cashbooks are the counterparty\'s, currency-matched, excluding the initiator\'s', async () => {
         const f = await fixture();
         const proposal: any = await peerLinks().createPeerLink(f.aliceBook.id, f.alice.id, {

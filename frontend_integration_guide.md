@@ -170,7 +170,7 @@ Payments are **cross-confirmed**: recording a payment on either side opens a set
 - **`GET /peer-links`** — your links, either side. **Query:** `?direction=incoming|outgoing&status=PENDING|ACCEPTED|DECLINED|CANCELLED&page=1&limit=20`
   - Response rows are **viewer-relative**: `viewerIsInitiator`, `viewerDirection` (LENDING/BORROWING from your perspective), `counterparty`, `myBook`, `theirBook`, `myObligationId`, `theirObligationId`.
 - **`GET /peer-links/:peerLinkId`** — one link with full settlement history.
-- **`GET /peer-links/:peerLinkId/acceptable-cashbooks`** — counterparty only: their currency-matched, active books (excludes the initiator's book).
+- **`GET /peer-links/:peerLinkId/acceptable-cashbooks`** — counterparty only: their currency-matched, active books (excludes the initiator's book). Returns `[]` (not an error) once the link is no longer pending — the picker just has nothing to offer.
 - **`POST /peer-links/:peerLinkId/accept`** — counterparty only. **Body:** `{ "cashbookId": "uuid" }`
   - Validates: book is theirs to manage, same currency as the link, not the initiator's book. Creates both mirrored obligations (opening journals included), auto-creates a linked contact for the counterparty in each workspace, sets `ACCEPTED`. Idempotency-Key required.
 - **`POST /peer-links/:peerLinkId/decline`** — counterparty only. **Body:** `{ "reason": "Optional" }`

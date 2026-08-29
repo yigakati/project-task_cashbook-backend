@@ -22,6 +22,26 @@ const ENDPOINT = 'POST /test/things';
 const WORKSPACE_ID = randomUUID();
 const USER_ID = randomUUID();
 
+/** A person-scoped endpoint: authenticated, but a member of no workspace —
+ *  the shape of POST /peer-links/:peerLinkId/accept. */
+function buildUnscopedApp(handler: express.RequestHandler) {
+    const app = express();
+    app.use(express.json());
+    app.post(
+        '/test/things',
+        (req, _res, next) => {
+            (req as never as { user: unknown }).user = { userId: USER_ID };
+            next();
+        },
+        idempotency(ENDPOINT) as express.RequestHandler,
+        handler,
+    );
+    app.use((err: { statusCode?: number; message: string; code?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+        res.status(err.statusCode ?? 500).json({ success: false, message: err.message, code: err.code });
+    });
+    return app;
+}
+
 function buildApp(handler: express.RequestHandler, mode: 'warn' | 'required' = 'warn') {
     const app = express();
     app.use(express.json());
@@ -139,6 +159,37 @@ describe('idempotency middleware', () => {
 
         expect(retried.status).toBe(201);
         expect(retried.body.attempt).toBe(2);
+    });
+
+    it('settles its record without a workspace scope (person-scoped endpoints)', async () => {
+        // Regression: peer link acceptance runs with no workspace on the
+        // request, and the settle-by-compound-key update crashed with
+        // "Argument workspaceId must not be null", leaving the record
+        // IN_PROGRESS forever.
+        const handler = vi.fn((_req: express.Request, res: express.Response) => {
+            res.status(200).json({ success: true, accepted: true });
+        });
+        const app = buildUnscopedApp(handler);
+        const key = randomUUID();
+
+        const response = await request(app)
+            .post('/test/things')
+            .set('Idempotency-Key', key)
+            .send({ cashbookId: 'some-book' });
+
+        expect(response.status).toBe(200);
+        expect(response.body.accepted).toBe(true);
+
+        // The settle happens just before the response flushes; give it a beat,
+        // then the record must be COMPLETED — not stuck IN_PROGRESS.
+        await new Promise((r) => setTimeout(r, 150));
+        const record = await testPrisma.idempotencyRecord.findFirst({
+            where: { endpoint: ENDPOINT, key },
+        });
+        expect(record).not.toBeNull();
+        expect(record!.state).toBe('COMPLETED');
+        expect(record!.workspaceId).toBeNull();
+        expect(handler).toHaveBeenCalledTimes(1);
     });
 
     it('collapses concurrent requests with the same key to a single execution', async () => {

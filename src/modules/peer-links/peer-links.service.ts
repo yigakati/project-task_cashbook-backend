@@ -204,6 +204,22 @@ export class PeerLinksService {
                 throw new AppError('The initiator\'s book is no longer active', 400, 'BOOK_INACTIVE');
             }
 
+            // Claim the link BEFORE building anything on top of it. The status
+            // filter inside the where-clause is the atomic guard: a second
+            // concurrent accept — even one that read PENDING a moment ago —
+            // matches zero rows, rolls back, and surfaces as INVALID_STATUS
+            // instead of minting a second pair of obligations. The
+            // (peer_link_id, cashbook_id) unique index remains the backstop.
+            const updated = await tx.peerLink.update({
+                where: { id: pending.id, status: PeerLinkStatus.PENDING },
+                data: {
+                    status: PeerLinkStatus.ACCEPTED,
+                    counterpartyWorkspaceId: cashbook.workspaceId,
+                    counterpartyCashbookId: cashbook.id,
+                    respondedAt: new Date(),
+                },
+            });
+
             // Each side sees the other as a contact, so existing receivables/
             // payables reports and contact-based flows keep working unchanged.
             const [initiatorContact, counterpartyContact] = await Promise.all([
@@ -251,16 +267,6 @@ export class PeerLinksService {
                 userId,
             });
 
-            const updated = await tx.peerLink.update({
-                where: { id: pending.id },
-                data: {
-                    status: PeerLinkStatus.ACCEPTED,
-                    counterpartyWorkspaceId: cashbook.workspaceId,
-                    counterpartyCashbookId: cashbook.id,
-                    respondedAt: new Date(),
-                },
-            });
-
             await tx.auditLog.create({
                 data: {
                     userId,
@@ -300,6 +306,13 @@ export class PeerLinksService {
             );
 
             return updated;
+        }).catch((error) => {
+            // The PENDING-guarded update found no row: another request decided
+            // this link between our read and our write.
+            if ((error as { code?: string }).code === 'P2025') {
+                throw new AppError('This peer link is no longer pending', 400, 'INVALID_STATUS');
+            }
+            throw error;
         });
 
         for (const n of queued) NotificationsService.dispatch(n);
@@ -476,7 +489,11 @@ export class PeerLinksService {
             throw new AuthorizationError('Only the counterparty can respond to this peer link');
         }
         if (link.status !== PeerLinkStatus.PENDING) {
-            throw new AppError(`This peer link is already ${link.status.toLowerCase()}`, 400, 'INVALID_STATUS');
+            // Not an error: the picker asks "which books could I accept into",
+            // and once the link is decided that set is simply empty. Throwing
+            // here turned the dialog's own refetch — racing the accept success
+            // that invalidated it — into a spurious 400.
+            return { data: [] };
         }
 
         // Books the user can actually accept into — the same access the accept
