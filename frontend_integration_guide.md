@@ -141,3 +141,63 @@ Manage how the invoice PDF looks.
 - **`GET /reports/overdue`** -> Lists all overdue invoices
 - **`GET /reports/summary`** -> Overview of invoice totals
 - **`GET /reports/customer-outstanding`** -> Outstanding balances grouped by customer
+
+---
+
+## 4. Peer Links (`/api/v1/peer-links` & `/api/v1/cashbooks/:cashbookId/peer-links`)
+
+Peer Links are loan agreements between two **platform users**. The initiator proposes from one of their books; **nothing touches any book until the counterparty accepts and chooses one of their own books**. On acceptance, two mirrored obligations are created atomically — a RECEIVABLE on the lender's book, a PAYABLE on the borrower's — so the platform's audit trail is the shared proof of the loan.
+
+Payments are **cross-confirmed**: recording a payment on either side opens a settlement the other party confirms (optionally by matching an entry they already recorded) or rejects. Neither book is ever written to by the other party's action.
+
+### Propose (from a book you manage)
+- **`POST /cashbooks/:cashbookId/peer-links`** (requires `MANAGE_OBLIGATIONS`, send an `Idempotency-Key` header)
+  - **Body:**
+    ```json
+    {
+      "direction": "LENDING",            // LENDING = I hold the receivable; BORROWING = I hold the payable
+      "counterpartyEmail": "bob@example.com",
+      "title": "Loan to Bob",
+      "principalAmount": "100000",       // or "totalAmount" when no interest
+      "interestRate": "10",              // flat, resolved once; or "interestAmount" — never both
+      "dueDate": "2026-09-28T00:00:00.000Z",
+      "description": "Optional"
+    }
+    ```
+  - Creates a `PENDING` peer link and notifies the counterparty. Same email-resolution rules as obligations.
+
+### Respond & manage (person-scoped — follows the user, not a workspace)
+- **`GET /peer-links`** — your links, either side. **Query:** `?direction=incoming|outgoing&status=PENDING|ACCEPTED|DECLINED|CANCELLED&page=1&limit=20`
+  - Response rows are **viewer-relative**: `viewerIsInitiator`, `viewerDirection` (LENDING/BORROWING from your perspective), `counterparty`, `myBook`, `theirBook`, `myObligationId`, `theirObligationId`.
+- **`GET /peer-links/:peerLinkId`** — one link with full settlement history.
+- **`GET /peer-links/:peerLinkId/acceptable-cashbooks`** — counterparty only: their currency-matched, active books (excludes the initiator's book).
+- **`POST /peer-links/:peerLinkId/accept`** — counterparty only. **Body:** `{ "cashbookId": "uuid" }`
+  - Validates: book is theirs to manage, same currency as the link, not the initiator's book. Creates both mirrored obligations (opening journals included), auto-creates a linked contact for the counterparty in each workspace, sets `ACCEPTED`. Idempotency-Key required.
+- **`POST /peer-links/:peerLinkId/decline`** — counterparty only. **Body:** `{ "reason": "Optional" }`
+- **`POST /peer-links/:peerLinkId/cancel`** — initiator only, PENDING only. Accepted links are settled or written off from the books, not cancelled here.
+- **`GET /peer-links/users/lookup?email=`** — exact-match user lookup for the proposal form (no enumeration surface).
+
+### Cross-confirmed settlements
+- A payment = an ordinary Entry with `obligationId` on either side's obligation (`POST /entries/cashbook/:cashbookId`). This automatically creates a `PENDING` settlement and notifies the counterparty.
+- **`POST /peer-links/settlements/:settlementId/decision`** — the party who did NOT record the payment. Idempotency-Key required. **Body:**
+  ```json
+  { "decision": "CONFIRM", "matchedEntryId": "uuid-of-your-own-payment-entry" }
+  ```
+  - `CONFIRM` alone acknowledges the payment. With `matchedEntryId` it also links the two mirrored entries as proof — the entry must pay your side of the same link and match the amount exactly (`AMOUNT_MISMATCH` otherwise).
+  - `REJECT` takes a `reason`.
+- Reversing the payment entry (entry delete) automatically `CANCEL`s its settlement and restores the outstanding amount.
+
+### Workspace-wide obligations (Obligations page)
+- **`GET /workspaces/:workspaceId/obligations`** (workspace member)
+  - **Query:** `?status=ACTIVE|OPEN|PARTIAL|PAID|CANCELLED&type=RECEIVABLE|PAYABLE&cashbookId=uuid&search=...&page=1&limit=20`
+  - Books are narrowed server-side: org-wide roles (OWNER/ADMIN/GM/ACCOUNTANT) see every book; others see only books they hold a `CashbookMember` row for. Rows include `cashbook`, `contact`, `peerLink` and `interest`.
+
+### Error codes to handle
+| Code | Meaning |
+|---|---|
+| `SELF_PEER_LINK` | Tried to propose to yourself |
+| `USER_NOT_FOUND` | No active user with that email |
+| `INVALID_STATUS` | Link/settlement already decided — refresh |
+| `CURRENCY_MISMATCH` | Chosen book's currency differs from the link's |
+| `INVALID_CASHBOOK` | Chosen the initiator's own book |
+| `INVALID_MATCH` / `AMOUNT_MISMATCH` | Matched entry isn't on your side of the link / wrong amount |

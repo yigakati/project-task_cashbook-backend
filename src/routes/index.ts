@@ -16,6 +16,11 @@ import auditRoutes from '../modules/audit/audit.routes';
 import platformRoutes from '../modules/platform/platform.routes';
 import invitesRoutes from '../modules/invites/invites.routes';
 import { obligationsRouter } from '../modules/cashbook-obligations/obligations.routes';
+import {
+    peerLinksCashbookRouter,
+    peerLinksRouter,
+    workspaceObligationsRouter,
+} from '../modules/peer-links/peer-links.routes';
 import accountTypesRoutes from '../modules/account-types/account-types.routes';
 import accountCategoriesRoutes from '../modules/account-categories/account-categories.routes';
 import accountsRoutes from '../modules/accounts/accounts.routes';
@@ -60,6 +65,10 @@ router.use('/me/attendance', meAttendanceRoutes);
 router.use('/workspaces/:workspaceId/notifications', notificationsRoutes);
 router.use('/cashbooks', cashbooksRoutes);
 router.use('/cashbooks/:cashbookId/obligations', obligationsRouter);
+router.use('/cashbooks/:cashbookId/peer-links', peerLinksCashbookRouter);
+// Person-scoped, not workspace-scoped — a user's peer link inbox follows them
+// across workspaces, like /me/attendance.
+router.use('/peer-links', peerLinksRouter);
 router.use('/entries', entriesRoutes);
 router.use('/categories', categoriesRoutes);
 router.use('/contacts', contactsRoutes);
@@ -73,6 +82,9 @@ router.use('/audit', auditRoutes);
 // this without audit logging.
 router.use('/platform', platformRoutes);
 router.use('/invites', invitesRoutes);
+
+// ─── Workspace-wide obligations (Obligations page) ─────
+router.use('/workspaces/:workspaceId/obligations', workspaceObligationsRouter);
 
 // ─── Developer API Keys ───────────────────────────────
 // Scoped to a workspace; requires MANAGE_API_KEYS permission (see api-keys.routes.ts).

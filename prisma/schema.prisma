@@ -78,6 +78,9 @@ model User {
   apiKeysCreated        ApiKey[]                @relation("ApiKeyCreator")
   apiKeysRevoked        ApiKey[]                @relation("ApiKeyRevoker")
   linkedIdentities      LinkedIdentity[]
+  settlementsRecorded   PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
+  peerLinksInitiated    PeerLink[]              @relation("PeerLinkInitiator")
+  peerLinksReceived     PeerLink[]              @relation("PeerLinkCounterparty")
 
   @@unique([provider, providerId])
   @@map("users")
@@ -89,7 +92,6 @@ model User {
  * One row per OAuth identity linked to a user — the actual source of truth
  * for "can this Google/OC account sign this person in", queried instead of
  * `User.provider`/`User.providerId` wherever login resolves an identity.
- *
  * `User.provider`/`providerId` stay as a single, immutable record of how the
  * account was originally created (useful for display/audit) but are never
  * mutated after signup — mutating them to "the most recently used provider"
@@ -199,6 +201,8 @@ model Workspace {
   contacts               Contact[]
   paymentModes           PaymentMode[]
   obligations            CashbookObligation[]
+  peerLinksInitiated     PeerLink[]              @relation("PeerLinkInitiatorWorkspace")
+  peerLinksCounterparty  PeerLink[]              @relation("PeerLinkCounterpartyWorkspace")
   auditLogs              AuditLog[]
   financialAuditLogs     FinancialAuditLog[]
   pendingInvites         PendingInvite[]
@@ -323,16 +327,18 @@ model Cashbook {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  workspace         Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  members           CashbookMember[]
-  entries           Entry[]
-  obligations       CashbookObligation[]
-  attachments       Attachment[]
-  expenseClaims     TaskExpenseClaim[]
-  invoices          Invoice[]
-  cashLedgerAccount LedgerAccount?       @relation(fields: [cashLedgerAccountId], references: [id], onDelete: Restrict)
-  journalEntries    JournalEntry[]
-  ticketSettings    TicketSettings?
+  workspace             Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members               CashbookMember[]
+  entries               Entry[]
+  obligations           CashbookObligation[]
+  peerLinksInitiated    PeerLink[]           @relation("PeerLinkInitiatorCashbook")
+  peerLinksCounterparty PeerLink[]           @relation("PeerLinkCounterpartyCashbook")
+  attachments           Attachment[]
+  expenseClaims         TaskExpenseClaim[]
+  invoices              Invoice[]
+  cashLedgerAccount     LedgerAccount?       @relation(fields: [cashLedgerAccountId], references: [id], onDelete: Restrict)
+  journalEntries        JournalEntry[]
+  ticketSettings        TicketSettings?
 
   @@index([workspaceId])
   @@map("cashbooks")
@@ -358,38 +364,38 @@ model CashbookMember {
 // ─── Entry (Ledger) ────────────────────────────────────
 
 model Entry {
-  id             String      @id @default(uuid()) @db.Uuid
-  cashbookId     String      @map("cashbook_id") @db.Uuid
-  type           EntryType
-  amount         Decimal     @db.Decimal(20, 4)
-  chargeAmount   Decimal?    @map("charge_amount") @db.Decimal(20, 4)
-  description    String
-  categoryId     String?     @map("category_id") @db.Uuid
-  contactId      String?     @map("contact_id") @db.Uuid
-  paymentModeId  String?     @map("payment_mode_id") @db.Uuid
-  obligationId   String?     @map("obligation_id") @db.Uuid
-  entryDate      DateTime    @map("entry_date")
-  createdById    String      @map("created_by_id") @db.Uuid
+  id                  String      @id @default(uuid()) @db.Uuid
+  cashbookId          String      @map("cashbook_id") @db.Uuid
+  type                EntryType
+  amount              Decimal     @db.Decimal(20, 4)
+  chargeAmount        Decimal?    @map("charge_amount") @db.Decimal(20, 4)
+  description         String
+  categoryId          String?     @map("category_id") @db.Uuid
+  contactId           String?     @map("contact_id") @db.Uuid
+  paymentModeId       String?     @map("payment_mode_id") @db.Uuid
+  obligationId        String?     @map("obligation_id") @db.Uuid
+  entryDate           DateTime    @map("entry_date")
+  createdById         String      @map("created_by_id") @db.Uuid
   /// The API key that created this entry, when it originated from an external
   /// integration. Together with externalRef this provides durable idempotency
   /// and provenance without overloading the human description.
-  integrationApiKeyId String? @map("integration_api_key_id") @db.Uuid
-  externalRef    String?     @map("external_ref")
+  integrationApiKeyId String?     @map("integration_api_key_id") @db.Uuid
+  externalRef         String?     @map("external_ref")
   /// Mirrors (status == REVERSED). Retained so existing repository filters keep
   /// working through the cutover; dropped once every read path uses `status`.
-  isDeleted      Boolean     @default(false) @map("is_deleted")
-  deletedAt      DateTime?   @map("deleted_at")
-  deletedReason  String?     @map("deleted_reason")
+  isDeleted           Boolean     @default(false) @map("is_deleted")
+  deletedAt           DateTime?   @map("deleted_at")
+  deletedReason       String?     @map("deleted_reason")
   /// Entries are never destroyed. A "delete" posts a reversing journal and flips
   /// this to REVERSED; the row and its journals stay for audit.
-  status         EntryStatus @default(POSTED)
-  reversedAt     DateTime?   @map("reversed_at")
-  reversedById   String?     @map("reversed_by_id") @db.Uuid
-  reversalReason String?     @map("reversal_reason")
-  version        Int         @default(1)
-  isReconciled   Boolean     @default(false) @map("is_reconciled")
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
+  status              EntryStatus @default(POSTED)
+  reversedAt          DateTime?   @map("reversed_at")
+  reversedById        String?     @map("reversed_by_id") @db.Uuid
+  reversalReason      String?     @map("reversal_reason")
+  version             Int         @default(1)
+  isReconciled        Boolean     @default(false) @map("is_reconciled")
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
 
   cashbook            Cashbook             @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
   category            Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
@@ -404,7 +410,10 @@ model Entry {
   accountTransactions AccountTransaction[]
   ticketSale          TicketSale?
   membership          Membership?
+  settlementRecorded  PeerLinkSettlement[] @relation("PeerLinkSettlementRecorded")
+  settlementMatched   PeerLinkSettlement[] @relation("PeerLinkSettlementMatch")
 
+  @@unique([cashbookId, integrationApiKeyId, externalRef])
   @@index([cashbookId])
   @@index([entryDate])
   @@index([categoryId])
@@ -413,7 +422,6 @@ model Entry {
   @@index([isDeleted])
   @@index([cashbookId, status, entryDate])
   @@index([integrationApiKeyId])
-  @@unique([cashbookId, integrationApiKeyId, externalRef])
   @@map("entries")
 }
 
@@ -506,6 +514,10 @@ model CashbookObligation {
   contactId         String?          @map("contact_id") @db.Uuid
   referenceType     String?          @map("reference_type") // e.g. 'INVOICE'
   referenceId       String?          @map("reference_id") @db.Uuid
+  /// Set when this obligation is one side of a peer link. The two mirrored
+  /// obligations (lender's RECEIVABLE, borrower's PAYABLE) both carry the same
+  /// peerLinkId; payments on either side create cross-confirmable settlements.
+  peerLinkId        String?          @map("peer_link_id") @db.Uuid
   archivedAt        DateTime?        @map("archived_at")
   /// Bumped on every amount change, so the obligation's journal can be reversed
   /// and re-posted under a fresh posting key.
@@ -516,6 +528,7 @@ model CashbookObligation {
   workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   cashbook     Cashbook          @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
   contact      Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  peerLink     PeerLink?         @relation(fields: [peerLinkId], references: [id], onDelete: SetNull)
   entries      Entry[]
   expenseClaim TaskExpenseClaim?
 
@@ -525,7 +538,134 @@ model CashbookObligation {
   @@index([dueDate])
   @@index([contactId])
   @@index([referenceType, referenceId])
+  @@index([peerLinkId])
   @@map("cashbook_obligations")
+}
+
+// ─── Peer Links ────────────────────────────────────────
+//
+// A loan agreement between two platform users. The initiator proposes from one
+// of their books; nothing touches any book until the counterparty accepts and
+// chooses one of their own books. On acceptance, two mirrored obligations are
+// created — a RECEIVABLE on the lender's book, a PAYABLE on the borrower's —
+// so the platform's audit trail is the shared proof of the loan and both sides
+// carry it in their own books.
+
+enum PeerLinkStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+/// Which side of the loan the initiator is on. LENDING means the initiator's
+/// obligation is a RECEIVABLE (money going out to the counterparty); BORROWING
+/// means it is a PAYABLE. The counterparty always gets the mirror.
+enum PeerLinkDirection {
+  LENDING
+  BORROWING
+}
+
+model PeerLink {
+  id        String            @id @default(uuid()) @db.Uuid
+  status    PeerLinkStatus    @default(PENDING)
+  direction PeerLinkDirection
+
+  initiatorUserId         String  @map("initiator_user_id") @db.Uuid
+  initiatorWorkspaceId    String  @map("initiator_workspace_id") @db.Uuid
+  initiatorCashbookId     String  @map("initiator_cashbook_id") @db.Uuid
+  counterpartyUserId      String  @map("counterparty_user_id") @db.Uuid
+  /// Chosen by the counterparty at acceptance. Nullable until then, and stays
+  /// null if the link is declined or cancelled.
+  counterpartyWorkspaceId String? @map("counterparty_workspace_id") @db.Uuid
+  counterpartyCashbookId  String? @map("counterparty_cashbook_id") @db.Uuid
+
+  title           String
+  description     String?
+  /// The currency both books must share. Taken from the initiating book so the
+  /// two mirrored obligations can never be denominated differently.
+  currency        String
+  /// Same interest model as obligations: flat, resolved once at proposal time.
+  /// interestAmount is the authority; interestRate is kept for display.
+  principalAmount Decimal   @map("principal_amount") @db.Decimal(20, 4)
+  interestAmount  Decimal   @default(0) @map("interest_amount") @db.Decimal(20, 4)
+  interestRate    Decimal?  @map("interest_rate") @db.Decimal(9, 4)
+  totalAmount     Decimal   @map("total_amount") @db.Decimal(20, 4)
+  dueDate         DateTime? @map("due_date")
+
+  declinedReason String?   @map("declined_reason")
+  respondedAt    DateTime? @map("responded_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  initiatorUser         User                 @relation("PeerLinkInitiator", fields: [initiatorUserId], references: [id])
+  counterpartyUser      User                 @relation("PeerLinkCounterparty", fields: [counterpartyUserId], references: [id])
+  initiatorWorkspace    Workspace            @relation("PeerLinkInitiatorWorkspace", fields: [initiatorWorkspaceId], references: [id], onDelete: Cascade)
+  counterpartyWorkspace Workspace?           @relation("PeerLinkCounterpartyWorkspace", fields: [counterpartyWorkspaceId], references: [id], onDelete: SetNull)
+  initiatorCashbook     Cashbook             @relation("PeerLinkInitiatorCashbook", fields: [initiatorCashbookId], references: [id], onDelete: Cascade)
+  counterpartyCashbook  Cashbook?            @relation("PeerLinkCounterpartyCashbook", fields: [counterpartyCashbookId], references: [id], onDelete: SetNull)
+  /// Exactly two rows once accepted: the lender's RECEIVABLE and the borrower's
+  /// PAYABLE. Told apart by comparing obligation.cashbookId with the
+  /// initiator/counterparty cashbook ids above.
+  obligations           CashbookObligation[]
+  settlements           PeerLinkSettlement[]
+
+  @@index([status])
+  @@index([initiatorUserId])
+  @@index([counterpartyUserId])
+  @@map("peer_links")
+}
+
+// ─── Peer Link Settlements ─────────────────────────────
+//
+// Cross-confirmed settlement: when either party records a payment against their
+// side of a peer link, a PENDING settlement is created for the counterparty to
+// confirm — by recording the mirrored payment themselves, or by matching an
+// entry they already recorded — or to reject. Neither book is ever written to
+// by the other party's action; a payment only becomes "confirmed" when both
+// books carry it.
+
+enum PeerLinkSettlementStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  /// The recording entry was reversed, so the settlement no longer stands.
+  CANCELLED
+}
+
+model PeerLinkSettlement {
+  id         String                   @id @default(uuid()) @db.Uuid
+  peerLinkId String                   @map("peer_link_id") @db.Uuid
+  status     PeerLinkSettlementStatus @default(PENDING)
+
+  /// The entry that recorded this payment on the recorder's own book. Unique:
+  /// one settlement per payment entry.
+  entryId          String   @unique @map("entry_id") @db.Uuid
+  obligationId     String   @map("obligation_id") @db.Uuid
+  recordedByUserId String   @map("recorded_by_user_id") @db.Uuid
+  amount           Decimal  @db.Decimal(20, 4)
+  entryDate        DateTime @map("entry_date")
+
+  /// The counterparty's entry that confirmed this payment — the mirrored entry
+  /// they recorded (or had already recorded and matched). Unique when set, so
+  /// one entry can never confirm two different payments.
+  matchedEntryId String? @unique @map("matched_entry_id") @db.Uuid
+
+  respondedAt    DateTime? @map("responded_at")
+  responseReason String?   @map("response_reason")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  peerLink       PeerLink @relation(fields: [peerLinkId], references: [id], onDelete: Cascade)
+  recordedByUser User     @relation("PeerLinkSettlementRecorder", fields: [recordedByUserId], references: [id])
+  entry          Entry    @relation("PeerLinkSettlementRecorded", fields: [entryId], references: [id])
+  matchedEntry   Entry?   @relation("PeerLinkSettlementMatch", fields: [matchedEntryId], references: [id], onDelete: SetNull)
+
+  @@index([peerLinkId])
+  @@index([status])
+  @@index([entryId])
+  @@index([matchedEntryId])
+  @@map("peer_link_settlements")
 }
 
 model Category {
@@ -2339,6 +2479,10 @@ enum NotificationType {
   ATTENDANCE_WRAP_UP
   SESSION_AUTO_CLOSED
   ATTENDANCE_FLAG_RAISED
+  PEER_LINK_RECEIVED
+  PEER_LINK_DECIDED
+  PEER_LINK_PAYMENT_RECORDED
+  PEER_LINK_SETTLEMENT_DECIDED
 }
 
 /// What a notification points at, so it can link to something other than a task
@@ -2353,6 +2497,8 @@ enum NotificationEntityType {
   WORK_REPORT
   WORK_SESSION
   ATTENDANCE_FLAG
+  PEER_LINK
+  PEER_LINK_SETTLEMENT
 }
 
 model Notification {
@@ -3108,35 +3254,35 @@ enum ApiKeyStatus {
 }
 
 model ApiKey {
-  id            String       @id @default(uuid()) @db.Uuid
-  workspaceId   String       @map("workspace_id") @db.Uuid
+  id             String        @id @default(uuid()) @db.Uuid
+  workspaceId    String        @map("workspace_id") @db.Uuid
   /// Human-readable label, e.g. "POS System", "E-commerce Store".
-  name          String
+  name           String
   /// SHA-256 hash of the raw API key (hex-encoded). Never store the raw key.
-  keyHash       String       @unique @map("key_hash")
+  keyHash        String        @unique @map("key_hash")
   /// First 12 characters of the raw key for display purposes only.
-  keyPrefix     String       @map("key_prefix")
+  keyPrefix      String        @map("key_prefix")
   /// What this key is allowed to do. At least one scope is required.
-  scopes        ApiKeyScope[]
-  status        ApiKeyStatus @default(ACTIVE)
+  scopes         ApiKeyScope[]
+  status         ApiKeyStatus  @default(ACTIVE)
   /// The user who created this key.
-  createdById   String       @map("created_by_id") @db.Uuid
+  createdById    String        @map("created_by_id") @db.Uuid
   /// Cashbooks this key can access (by internal id). Empty array means no
   /// book access; key creation requires at least one active book.
-  allowedBookIds String[]    @default([]) @map("allowed_book_ids") @db.Uuid
+  allowedBookIds String[]      @default([]) @map("allowed_book_ids") @db.Uuid
   /// Exact IPv4/IPv6 addresses this key is allowed to call from.
   /// Empty array = no IP restriction.
-  allowedIps    String[]     @default([]) @map("allowed_ips")
-  lastUsedAt    DateTime?    @map("last_used_at")
-  expiresAt     DateTime?    @map("expires_at")
-  revokedAt     DateTime?    @map("revoked_at")
-  revokedById   String?      @map("revoked_by_id") @db.Uuid
-  createdAt     DateTime     @default(now()) @map("created_at")
-  updatedAt     DateTime     @updatedAt @map("updated_at")
+  allowedIps     String[]      @default([]) @map("allowed_ips")
+  lastUsedAt     DateTime?     @map("last_used_at")
+  expiresAt      DateTime?     @map("expires_at")
+  revokedAt      DateTime?     @map("revoked_at")
+  revokedById    String?       @map("revoked_by_id") @db.Uuid
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
 
-  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy  User      @relation("ApiKeyCreator", fields: [createdById], references: [id])
-  revokedBy  User?     @relation("ApiKeyRevoker", fields: [revokedById], references: [id])
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ApiKeyCreator", fields: [createdById], references: [id])
+  revokedBy User?     @relation("ApiKeyRevoker", fields: [revokedById], references: [id])
 
   @@index([workspaceId])
   @@index([keyHash])

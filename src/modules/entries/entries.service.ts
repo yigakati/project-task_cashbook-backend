@@ -427,6 +427,20 @@ export class EntriesService {
                 referenceId: lockedObligation.referenceId,
                 outstandingAmount: newOutstanding,
             });
+
+            // Peer links: a payment on a linked obligation opens a settlement
+            // the counterparty must confirm or reject. Fire after the invoice
+            // sync, same transaction, so proof and books never diverge.
+            const { PeerLinksService } = await import('../peer-links/peer-links.service');
+            await PeerLinksService.onPaymentApplied(tx, {
+                obligation: { id: lockedObligation.id, peerLinkId: lockedObligation.peerLinkId },
+                entry: {
+                    id: newEntry.id,
+                    amount,
+                    entryDate,
+                    createdById: userId,
+                },
+            });
         }
 
         // Create entry audit
@@ -1339,6 +1353,15 @@ export class EntriesService {
                 referenceType: lockedObligation.referenceType,
                 referenceId: lockedObligation.referenceId,
                 outstandingAmount: cappedOutstanding,
+            });
+
+            // Peer links: the settlement this payment opened — whether still
+            // pending or already confirmed — no longer stands once the entry is
+            // reversed.
+            const { PeerLinksService } = await import('../peer-links/peer-links.service');
+            await PeerLinksService.onPaymentReversed(tx, {
+                obligation: { peerLinkId: lockedObligation.peerLinkId },
+                entryId: entry.id,
             });
         }
 

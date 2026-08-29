@@ -75,6 +75,7 @@ import { ExpenseClaimsService } from '../modules/expense-claims/expense-claims.s
 import { ExpenseClaimsController } from '../modules/expense-claims/expense-claims.controller';
 import { TimeTrackingService } from '../modules/time-tracking/time-tracking.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
+import { PeerLinksService } from '../modules/peer-links/peer-links.service';
 import { PlatformService } from '../modules/platform/platform.service';
 import { LedgerReportsService } from '../modules/ledger-reports/ledger-reports.service';
 import { ChartOfAccountsService } from '../modules/chart-of-accounts/chart-of-accounts.service';
@@ -110,6 +111,7 @@ container.registerSingleton(PeopleOpsService);
 container.registerSingleton(ExpenseClaimsService);
 container.registerSingleton(TimeTrackingService);
 container.registerSingleton(NotificationsService);
+container.registerSingleton(PeerLinksService);
 container.registerSingleton(PlatformService);
 container.registerSingleton(LedgerReportsService);
 container.registerSingleton(ChartOfAccountsService);
