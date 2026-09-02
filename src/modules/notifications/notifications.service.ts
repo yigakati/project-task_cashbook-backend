@@ -56,7 +56,10 @@ export class NotificationsService {
         if (isRead !== undefined) where.isRead = isRead;
         if (type) where.type = type;
 
-        const [notifications, total] = await Promise.all([
+        // Unread count ignores the isRead filter: the badge shows the whole
+        // inbox's unread total even when the list itself is filtered to read
+        // or unread items.
+        const [notifications, total, unreadCount] = await Promise.all([
             this.prisma.notification.findMany({
                 where,
                 skip,
@@ -65,11 +68,15 @@ export class NotificationsService {
                 include: { task: { select: { id: true, title: true } } },
             }),
             this.prisma.notification.count({ where }),
+            this.prisma.notification.count({
+                where: { userId, workspaceId, isRead: false },
+            }),
         ]);
 
         const totalPages = Math.ceil(total / limit);
         return {
             data: notifications,
+            unreadCount,
             pagination: {
                 page,
                 limit,
