@@ -226,6 +226,21 @@ export class InventoryController {
         }
     }
 
+    async createDirectRental(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.service.createDirectRental(
+                req.params.workspaceId as string,
+                req.user.userId,
+                req.body,
+            );
+            res.status(StatusCodes.CREATED).json({
+                success: true,
+                message: 'Rental recorded and paid',
+                data: result,
+            });
+        } catch (error) { next(error); }
+    }
+
     async returnRental(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.service.returnRental(

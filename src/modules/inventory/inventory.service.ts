@@ -1,6 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient, InventoryTransactionType, InventoryReferenceType, InventoryCostMethod } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { withFinancialTransaction } from '../../core/db/transaction';
 import { InventoryRepository } from './inventory.repository';
 import { AppError, NotFoundError } from '../../core/errors/AppError';
 import { AuditAction } from '../../core/types';
@@ -74,6 +75,17 @@ export class InventoryService {
             }
         }
 
+        // Costing is a sale concept: a cost method on a rent-only item is
+        // meaningless (it never stocks out for sale) and only invites the
+        // question "why is this here?". Refused rather than silently dropped.
+        if (dto.commercialMode === 'RENT_ONLY' && dto.costMethod) {
+            throw new AppError(
+                'Rent-only items do not carry a cost method — costing applies to items that sell',
+                400,
+                'RENT_ONLY_HAS_NO_COST_METHOD',
+            );
+        }
+
         return this.prisma.$transaction(async (tx) => {
             const item = await tx.inventoryItem.create({
                 data: {
@@ -92,7 +104,10 @@ export class InventoryService {
                         : null,
                     defaultRentalPeriodUnit: (dto.defaultRentalPeriodUnit as any) || null,
                     lowStockThreshold: dto.lowStockThreshold ?? null,
-                    costMethod: dto.costMethod as any,
+                    // Rent-only items carry no costing method of their own; the
+                    // column stays non-null with its default so any legacy
+                    // COGS read remains structurally safe.
+                    costMethod: (dto.costMethod || 'WEIGHTED_AVERAGE') as any,
                     allowNegativeStock: dto.allowNegativeStock,
                 },
             });
@@ -193,6 +208,16 @@ export class InventoryService {
     }
 
     async updateItem(itemId: string, workspaceId: string, userId: string, dto: UpdateInventoryItemDto) {
+        // A rent-only item never stocks out for sale, so a cost method on it
+        // is meaningless — refuse rather than silently drop.
+        if (dto.commercialMode === 'RENT_ONLY' && (dto as { costMethod?: string }).costMethod) {
+            throw new AppError(
+                'Rent-only items do not carry a cost method — costing applies to items that sell',
+                400,
+                'RENT_ONLY_HAS_NO_COST_METHOD',
+            );
+        }
+
         const item = await this.repository.findItemById(itemId);
         if (!item || item.workspaceId !== workspaceId) {
             throw new NotFoundError('Inventory Item');
@@ -1380,6 +1405,7 @@ export class InventoryService {
         userId: string,
         notes: string,
         unitRate: Decimal,
+        referenceType: 'INVOICE' | 'RENTAL' = 'INVOICE',
     ) {
         const item = await tx.inventoryItem.findUnique({
             where: { id: itemId },
@@ -1401,7 +1427,7 @@ export class InventoryService {
             InventoryTransactionType.RENTAL_OUT,
             quantity,
             userId,
-            InventoryReferenceType.INVOICE,
+            InventoryReferenceType[referenceType],
             invoiceId,
             notes,
             tx,
@@ -1413,6 +1439,178 @@ export class InventoryService {
      * Return units from an active rental. Restores stock via RENTAL_IN.
      * Partial returns supported; full return marks rental RETURNED.
      */
+    /**
+     * A rental recorded and paid in one step — no invoice, no obligation.
+     *
+     * The walk-in rental desk: hand over the asset, take the money, done. The
+     * rental row, its lines, the RENTAL_OUT stock movement and the INCOME
+     * entry (with its journal and wallet movement) commit atomically, so the
+     * books can never show stock out without the matching money in, or vice
+     * versa. Invoice-driven rentals remain exactly as they were.
+     */
+    async createDirectRental(
+        workspaceId: string,
+        userId: string,
+        dto: {
+            customerId: string;
+            cashbookId: string;
+            itemId: string;
+            quantity: number;
+            unitRate: string;
+            periodUnit: 'DAY' | 'WEEK' | 'MONTH';
+            periodCount: number;
+            startDate: string;
+            endDate: string;
+            /** Optional deposit collected on top of the rental charge. */
+            depositAmount?: string;
+            notes?: string;
+            /** Wallet the payment landed in; omitted = book-cash entry. */
+            accountId?: string;
+        },
+    ) {
+        return withFinancialTransaction(this.prisma, async (tx) => {
+            const workspace = await tx.workspace.findUniqueOrThrow({
+                where: { id: workspaceId },
+                select: { defaultCurrency: true, isActive: true },
+            });
+            if (!workspace.isActive) throw new NotFoundError('Workspace');
+
+            const customer = await tx.contact.findFirst({
+                where: { id: dto.customerId, workspaceId },
+            });
+            if (!customer) throw new NotFoundError('Customer');
+
+            const cashbook = await tx.cashbook.findUnique({ where: { id: dto.cashbookId } });
+            if (!cashbook || !cashbook.isActive || cashbook.workspaceId !== workspaceId) {
+                throw new NotFoundError('Cashbook');
+            }
+
+            const item = await tx.inventoryItem.findUnique({
+                where: { id: dto.itemId },
+                include: { stock: true },
+            });
+            if (!item || item.workspaceId !== workspaceId) {
+                throw new NotFoundError('Inventory item');
+            }
+            if (item.commercialMode === 'SELL_ONLY') {
+                throw new AppError(
+                    `Item "${item.name}" is sell-only and cannot be rented`,
+                    400,
+                    'ITEM_NOT_RENTABLE',
+                );
+            }
+
+            const rate = new Decimal(dto.unitRate);
+            if (rate.lessThanOrEqualTo(0)) {
+                throw new AppError('Rental rate must be greater than zero', 400, 'INVALID_RATE');
+            }
+            const periods = Math.max(1, Math.round(dto.periodCount));
+            const qty = Math.round(dto.quantity);
+            if (qty <= 0) {
+                throw new AppError('Quantity must be at least 1', 400, 'INVALID_QUANTITY');
+            }
+            if (item.currency !== cashbook.currency) {
+                throw new AppError(
+                    `Item currency (${item.currency}) does not match cashbook (${cashbook.currency})`,
+                    400,
+                    'CURRENCY_MISMATCH',
+                );
+            }
+
+            const lineTotal = rate.mul(qty).mul(periods);
+            const deposit = dto.depositAmount ? new Decimal(dto.depositAmount) : new Decimal(0);
+            const total = lineTotal.add(deposit);
+
+            const rental = await tx.inventoryRental.create({
+                data: {
+                    workspaceId,
+                    customerId: dto.customerId,
+                    // No invoice: this rental was paid up front, in the book.
+                    invoiceId: null,
+                    status: 'ACTIVE' as any,
+                    currency: cashbook.currency,
+                    startDate: new Date(dto.startDate),
+                    endDate: dto.endDate ? new Date(dto.endDate) : null,
+                    depositAmount: deposit.greaterThan(0) ? deposit : null,
+                    notes: dto.notes || 'Direct rental (paid on issue)',
+                    createdById: userId,
+                },
+            });
+
+            await tx.inventoryRentalLine.create({
+                data: {
+                    rentalId: rental.id,
+                    inventoryItemId: item.id,
+                    quantity: qty,
+                    unitRate: rate,
+                    periodUnit: dto.periodUnit,
+                    periodCount: periods,
+                    lineTotal,
+                },
+            });
+
+            // The stock side: units leave as rented, COGS-free (same as the
+            // invoice path's RENTAL_OUT).
+            await this.processRentalOutForInvoice(
+                tx,
+                workspaceId,
+                // referenceId doubles as the provenance for stock movement:
+                // the rental itself, not an invoice.
+                rental.id,
+                item.id,
+                qty,
+                userId,
+                `Rental out (direct, paid) for ${customer.name}`,
+                rate,
+                'RENTAL',
+            );
+
+            // The money side: an ordinary income entry through the ordinary
+            // path, so the journal, wallet ledger and balances all behave.
+            // Authority is enforced by createEntryWithin's own book checks
+            // via the caller's route guard.
+            // entries.service statically imports InventoryService, so a
+            // constructor back-import would be a DI cycle. Resolve lazily from
+            // the container (singleton) — the same dodge the entries module
+            // uses for invoicing.
+            const { container } = await import('tsyringe');
+            const { EntriesService } = await import('../entries/entries.service');
+            const entry = await container.resolve(EntriesService).createEntryWithin(
+                tx,
+                cashbook.id,
+                userId,
+                {
+                    type: 'INCOME' as any,
+                    amount: total.toFixed(4),
+                    description: `Rental — ${item.name} × ${qty} (${periods} ${dto.periodUnit.toLowerCase()}${periods > 1 ? 's' : ''}) — ${customer.name}`,
+                    accountId: dto.accountId,
+                    contactId: dto.customerId,
+                    entryDate: new Date(dto.startDate).toISOString(),
+                } as any,
+            );
+
+            await tx.auditLog.create({
+                data: {
+                    userId,
+                    workspaceId,
+                    action: AuditAction.INVENTORY_RENTAL_CREATED,
+                    resource: 'inventory_rental',
+                    resourceId: rental.id,
+                    details: {
+                        direct: true,
+                        itemId: item.id,
+                        customerId: dto.customerId,
+                        entryId: entry.id,
+                        lineTotal: lineTotal.toString(),
+                        deposit: deposit.toString(),
+                    } as any,
+                },
+            });
+
+            return { rental, entry };
+        });
+    }
+
     async returnRental(
         workspaceId: string,
         rentalId: string,

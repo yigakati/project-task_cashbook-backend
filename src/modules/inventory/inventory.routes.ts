@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { container } from 'tsyringe';
 import { InventoryController } from './inventory.controller';
 import { authenticate } from '../../middlewares/authenticate';
+import { idempotency } from '../../middlewares/idempotency';
 import { validate, validateMultiple } from '../../middlewares/validate';
 import { requireWorkspaceMember } from '../../middlewares/authorize';
 import { WorkspacePermission } from '../../core/types/workspace-permissions';
@@ -14,6 +15,7 @@ import {
     cogsReportQuerySchema,
     itemIdParamSchema,
     analyticsQuerySchema,
+    createDirectRentalSchema,
     returnRentalSchema,
     rentalQuerySchema,
 } from './inventory.dto';
@@ -160,6 +162,17 @@ router.get(
     requireWorkspaceMember(WorkspacePermission.VIEW_INVENTORY) as any,
     validate(rentalQuerySchema, 'query'),
     controller.listRentals.bind(controller) as any
+);
+
+// A rental issued and paid in one step. MANAGE_INVENTORY guards the rental
+// and stock side; the entry posts through the ordinary entry path inside the
+// same transaction.
+router.post(
+    '/rentals/direct',
+    requireWorkspaceMember(WorkspacePermission.MANAGE_INVENTORY) as any,
+    idempotency('POST /workspaces/:workspaceId/inventory/rentals/direct') as any,
+    validate(createDirectRentalSchema),
+    controller.createDirectRental.bind(controller) as any
 );
 
 router.post(

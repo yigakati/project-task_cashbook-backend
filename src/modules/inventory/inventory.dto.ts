@@ -20,12 +20,18 @@ export const createInventoryItemSchema = z.object({
     category: z.string().max(100).optional(),
     currency: currencyCode.default('UGX'),
     commercialMode: z.enum(['SELL_ONLY', 'RENT_ONLY', 'SELL_AND_RENT']).default('SELL_ONLY'),
-    sellingPrice: decimalString.optional(),
-    defaultSellingPrice: decimalString.optional(),
+    // Nullable, not just optional: the frontend sends an explicit null for
+    // rent-only items (no selling price applies), and Zod rejects null against
+    // a plain .optional() — the "validation failed with no clear error" bug.
+    sellingPrice: decimalString.nullable().optional(),
+    defaultSellingPrice: decimalString.nullable().optional(),
     defaultRentalRate: decimalString.optional(),
     defaultRentalPeriodUnit: z.enum(['DAY', 'WEEK', 'MONTH']).optional(),
     lowStockThreshold: z.coerce.number().int().min(0).optional(),
-    costMethod: z.enum(['WEIGHTED_AVERAGE', 'FIFO', 'LIFO']).default('WEIGHTED_AVERAGE'),
+    // Costing is a sale concept — only items that sell (SELL_ONLY or
+    // SELL_AND_RENT) need a COGS method. Rent-only items never stock-out for
+    // sale, so the method is refused rather than silently defaulted.
+    costMethod: z.enum(['WEIGHTED_AVERAGE', 'FIFO', 'LIFO']).optional(),
     allowNegativeStock: z.boolean().default(false),
     createProductService: z.boolean().optional().default(false),
     productServiceType: z.enum(['PRODUCT', 'SERVICE']).optional(),
@@ -59,6 +65,25 @@ export const inventoryItemQuerySchema = z.object({
     commercialMode: z.enum(['SELL_ONLY', 'RENT_ONLY', 'SELL_AND_RENT']).optional(),
     /** When true, only RENT_ONLY and SELL_AND_RENT items. */
     rentable: z.enum(['true', 'false']).optional(),
+});
+
+/**
+ * A rental recorded and paid in one step — no invoice. The entry posts into
+ * `cashbookId` immediately; `accountId` optionally names the wallet.
+ */
+export const createDirectRentalSchema = z.object({
+    customerId: z.string().uuid('A customer is required'),
+    cashbookId: z.string().uuid('A cashbook is required'),
+    itemId: z.string().uuid('An inventory item is required'),
+    quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+    unitRate: decimalString,
+    periodUnit: z.enum(['DAY', 'WEEK', 'MONTH']),
+    periodCount: z.coerce.number().int().min(1).default(1),
+    startDate: z.string().refine((v) => !isNaN(Date.parse(v)), { message: 'Invalid start date' }),
+    endDate: z.string().refine((v) => !isNaN(Date.parse(v)), { message: 'Invalid end date' }).optional(),
+    depositAmount: decimalString.optional(),
+    notes: z.string().max(1000).optional(),
+    accountId: z.string().uuid().optional(),
 });
 
 export const returnRentalSchema = z.object({
@@ -204,4 +229,5 @@ export type InventoryLineItemDto = z.infer<typeof inventoryLineItemSchema>;
 export type CogsReportQueryDto = z.infer<typeof cogsReportQuerySchema>;
 export type AnalyticsQueryDto = z.infer<typeof analyticsQuerySchema>;
 export type ReturnRentalDto = z.infer<typeof returnRentalSchema>;
+export type CreateDirectRentalDto = z.infer<typeof createDirectRentalSchema>;
 export type RentalQueryDto = z.infer<typeof rentalQuerySchema>;

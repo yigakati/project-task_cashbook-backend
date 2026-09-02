@@ -203,6 +203,7 @@ model Workspace {
   obligations            CashbookObligation[]
   peerLinksInitiated     PeerLink[]              @relation("PeerLinkInitiatorWorkspace")
   peerLinksCounterparty  PeerLink[]              @relation("PeerLinkCounterpartyWorkspace")
+  unitsOfMeasure         UnitOfMeasure[]
   auditLogs              AuditLog[]
   financialAuditLogs     FinancialAuditLog[]
   pendingInvites         PendingInvite[]
@@ -1402,6 +1403,27 @@ model LotConsumption {
 }
 
 // ─── Catalog (Products/Services + Tax) ─────────────────
+
+// ─── Units of Measure ──────────────────────────────────
+//
+// Workspace-scoped unit-of-measure vocabulary for inventory items. Items
+// reference a unit by name (the historical free-text column) so no migration
+// of existing rows is forced; this table is the curated list the UI suggests
+// from and manages, unique per workspace.
+
+model UnitOfMeasure {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  name        String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("units_of_measure")
+}
 
 enum ProductServiceType {
   PRODUCT

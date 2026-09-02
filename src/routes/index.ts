@@ -26,6 +26,7 @@ import accountCategoriesRoutes from '../modules/account-categories/account-categ
 import accountsRoutes from '../modules/accounts/accounts.routes';
 import accountTransactionsRoutes from '../modules/account-transactions/account-transactions.routes';
 import inventoryRoutes from '../modules/inventory/inventory.routes';
+import { unitsOfMeasureRouter } from '../modules/inventory/units-of-measure.routes';
 import catalogRoutes from '../modules/catalog/catalog.routes';
 import invoicingRoutes from '../modules/invoicing/invoicing.routes';
 import projectsRoutes from '../modules/projects/projects.routes';
@@ -51,6 +52,7 @@ router.use('/workspaces/:workspaceId/account-categories', accountCategoriesRoute
 router.use('/workspaces/:workspaceId/accounts', accountsRoutes);
 router.use('/workspaces/:workspaceId/accounts/:accountId/transactions', accountTransactionsRoutes);
 router.use('/workspaces/:workspaceId/inventory', inventoryRoutes);
+router.use('/workspaces/:workspaceId/units-of-measure', unitsOfMeasureRouter);
 router.use('/workspaces/:workspaceId/catalog', catalogRoutes);
 router.use('/workspaces/:workspaceId/invoices', invoicingRoutes);
 router.use('/workspaces/:workspaceId/projects', projectsRoutes);
