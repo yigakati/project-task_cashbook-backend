@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { EAST_AFRICAN_CURRENCY_CODES } from '../../core/finance';
+import { SUPPORTED_BASE_CURRENCY_CODES } from '../../core/finance';
 
 const eastAfricanCurrency = z
     .string()
     .trim()
     .transform((c) => c.toUpperCase())
-    .refine((c) => (EAST_AFRICAN_CURRENCY_CODES as readonly string[]).includes(c), {
-        message: `Currency must be one of: ${EAST_AFRICAN_CURRENCY_CODES.join(', ')}`,
+    .refine((c) => (SUPPORTED_BASE_CURRENCY_CODES as readonly string[]).includes(c), {
+        message: `Currency must be one of: ${SUPPORTED_BASE_CURRENCY_CODES.join(', ')}`,
     });
 
 export const createWorkspaceSchema = z.object({

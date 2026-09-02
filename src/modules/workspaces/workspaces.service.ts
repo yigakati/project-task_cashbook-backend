@@ -4,7 +4,7 @@ import { WorkspacesRepository } from './workspaces.repository';
 import { NotFoundError, AuthorizationError, AppError } from '../../core/errors/AppError';
 import { WorkspaceType, WorkspaceRole, AuditAction } from '../../core/types';
 import { CreateWorkspaceDto, UpdateWorkspaceDto } from './workspaces.dto';
-import { assertEastAfricanCurrency } from '../../core/finance';
+import { assertSupportedBaseCurrency } from '../../core/finance';
 import { provisionWorkspaceAccounting, seedDefaultWalletAccounts } from '../../core/ledger/coa.seed';
 
 @injectable()
@@ -27,7 +27,7 @@ export class WorkspacesService {
     }
 
     async createBusinessWorkspace(userId: string, dto: CreateWorkspaceDto) {
-        const defaultCurrency = assertEastAfricanCurrency(dto.defaultCurrency || 'UGX');
+        const defaultCurrency = assertSupportedBaseCurrency(dto.defaultCurrency || 'UGX');
         const workspace = await this.prisma.$transaction(async (tx) => {
             const ws = await tx.workspace.create({
                 data: {
@@ -95,7 +95,7 @@ export class WorkspacesService {
         }
 
         if (dto.defaultCurrency !== undefined) {
-            const nextCurrency = assertEastAfricanCurrency(dto.defaultCurrency);
+            const nextCurrency = assertSupportedBaseCurrency(dto.defaultCurrency);
             if (nextCurrency !== workspace.defaultCurrency) {
                 throw new AppError(
                     'Workspace base currency cannot be changed after creation',

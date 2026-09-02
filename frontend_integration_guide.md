@@ -155,7 +155,7 @@ Every **newly created** workspace — personal (local signup or OAuth) or busine
 | Bank | Bank (ASSET) | `Landmark` | workspace default |
 | Cash on Hand | Cash (ASSET) | `Banknote` | workspace default |
 
-Mobile money is seeded per carrier (separate floats), but both ride the one "Mobile Money" account type so type filters and reports still see them as one class. Note: manual payment-mode management is retired in the UI — payment modes auto-materialize per wallet account (`POST /payment-modes/:workspaceId/for-account/:accountId`), so the Categories page in settings offers only expense/income tabs.
+Mobile money is seeded per carrier (separate floats), but both ride the one "Mobile Money" account type so type filters and reports still see them as one class. Supported base currencies are now the East-African set **plus USD** (`SUPPORTED_BASE_CURRENCY_CODES` / `assertSupportedBaseCurrency`); the no-FX rule is unchanged — one base currency per workspace, cashbooks and wallets follow it. Note: manual payment-mode management is retired in the UI — payment modes auto-materialize per wallet account (`POST /payment-modes/:workspaceId/for-account/:accountId`), so the Categories page in settings offers only expense/income tabs.
 
 - Balances start at 0 (no opening-balance journals are posted by seeding).
 - Each wallet carries its ledger account (wallet movements post real journal lines).

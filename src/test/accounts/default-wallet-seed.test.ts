@@ -23,7 +23,7 @@ const workspaces = () => resolveService(WorkspacesService);
 const SEED_NAMES = ['Airtel Money', 'MTN MoMo', 'Bank', 'Cash on Hand'];
 
 /** The wallets, with their types and icons, as the template promises. */
-async function expectSeededWallets(workspaceId: string) {
+async function expectSeededWallets(workspaceId: string, currency = 'UGX') {
     const accounts = await testPrisma.account.findMany({
         where: { workspaceId },
         include: { accountType: true },
@@ -34,7 +34,7 @@ async function expectSeededWallets(workspaceId: string) {
 
     for (const account of accounts) {
         expect(account.balance.toString()).toBe('0');
-        expect(account.currency).toBe('UGX');
+        expect(account.currency).toBe(currency);
         // Every seeded wallet is a real bookkeeping object: it carries a
         // ledger account, so movements post journal lines from day one.
         expect(account.ledgerAccountId).not.toBeNull();
@@ -105,6 +105,18 @@ describe('default wallet seeding', () => {
         } as any);
 
         await expectSeededWallets(ws.id);
+    });
+
+    it('a USD-based business is accepted and seeds its wallets in USD', async () => {
+        const owner = await createUser();
+        const ws = await workspaces().createBusinessWorkspace(owner.id, {
+            name: 'Dollar Biz',
+            type: 'BUSINESS',
+            defaultCurrency: 'USD',
+        } as any);
+
+        expect(ws.defaultCurrency).toBe('USD');
+        await expectSeededWallets(ws.id, 'USD');
     });
 
     it('seeding is idempotent — running it again creates nothing new', async () => {

@@ -3,6 +3,15 @@ import { AppError } from '../errors/AppError';
 export const EAST_AFRICAN_CURRENCY_CODES = ['UGX', 'KES', 'TZS', 'RWF', 'BIF', 'SSP', 'ETB'] as const;
 export type EastAfricanCurrencyCode = typeof EAST_AFRICAN_CURRENCY_CODES[number];
 
+/**
+ * Currencies a workspace may be denominated in: the East-African set the
+ * product was built around, plus USD for businesses that trade in dollars.
+ * The no-FX rule is unchanged — a workspace still gets exactly one base
+ * currency; this only widens which one that may be.
+ */
+export const SUPPORTED_BASE_CURRENCY_CODES = [...EAST_AFRICAN_CURRENCY_CODES, 'USD'] as const;
+export type SupportedBaseCurrencyCode = typeof SUPPORTED_BASE_CURRENCY_CODES[number];
+
 /** Normalize ISO-like currency codes (UGX, USD, KES). */
 export function normalizeCurrency(code: string | null | undefined, fallback = 'UGX'): string {
     const c = (code || fallback).trim().toUpperCase();
@@ -16,16 +25,16 @@ export function normalizeCurrency(code: string | null | undefined, fallback = 'U
     return c;
 }
 
-export function assertEastAfricanCurrency(code: string | null | undefined): EastAfricanCurrencyCode {
+export function assertSupportedBaseCurrency(code: string | null | undefined): SupportedBaseCurrencyCode {
     const normalized = normalizeCurrency(code);
-    if (!(EAST_AFRICAN_CURRENCY_CODES as readonly string[]).includes(normalized)) {
+    if (!(SUPPORTED_BASE_CURRENCY_CODES as readonly string[]).includes(normalized)) {
         throw new AppError(
-            `Unsupported workspace base currency "${normalized}". Use one of: ${EAST_AFRICAN_CURRENCY_CODES.join(', ')}.`,
+            `Unsupported workspace base currency "${normalized}". Use one of: ${SUPPORTED_BASE_CURRENCY_CODES.join(', ')}.`,
             400,
             'UNSUPPORTED_BASE_CURRENCY',
         );
     }
-    return normalized as EastAfricanCurrencyCode;
+    return normalized as SupportedBaseCurrencyCode;
 }
 
 /**
