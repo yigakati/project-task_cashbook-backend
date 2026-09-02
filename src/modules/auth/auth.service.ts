@@ -23,6 +23,7 @@ import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
 import { verificationEmailTemplate, passwordResetEmailTemplate, welcomeEmailTemplate } from '../../utils/emailTemplates';
+import { provisionWorkspaceAccounting, seedDefaultWalletAccounts } from '../../core/ledger/coa.seed';
 
 const SUSPICIOUS_FAILURE_THRESHOLD = 5;
 const OTP_TTL_SECONDS = 15 * 60; // 15 minutes
@@ -57,14 +58,18 @@ export class AuthService {
                 },
             });
 
-            // Auto-create personal workspace
-            await tx.workspace.create({
+            // Auto-create personal workspace, born ready to book: chart of
+            // accounts, default wallet types, and the three obvious wallets —
+            // the same head start a business workspace gets.
+            const personalWorkspace = await tx.workspace.create({
                 data: {
                     name: `${dto.firstName}'s Personal`,
                     type: WorkspaceType.PERSONAL,
                     ownerId: user.id,
                 },
             });
+            await provisionWorkspaceAccounting(tx, personalWorkspace.id, personalWorkspace.defaultCurrency);
+            await seedDefaultWalletAccounts(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, user.id);
 
             // Audit log
             await tx.auditLog.create({
@@ -347,13 +352,15 @@ export class AuthService {
             data: { userId: newUser.id, provider, providerId, email },
         });
 
-        await tx.workspace.create({
+        const personalWorkspace = await tx.workspace.create({
             data: {
                 name: `${firstName}'s Personal`,
                 type: WorkspaceType.PERSONAL,
                 ownerId: newUser.id,
             },
         });
+        await provisionWorkspaceAccounting(tx, personalWorkspace.id, personalWorkspace.defaultCurrency);
+        await seedDefaultWalletAccounts(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, newUser.id);
 
         await tx.auditLog.create({
             data: {

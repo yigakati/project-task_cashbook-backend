@@ -6,10 +6,12 @@
  * data that predates the ledger.
  */
 import { AccountClassification, LedgerAccountClass, LedgerAccountOrigin, Prisma } from '@prisma/client';
+import { AuditAction } from '../../core/types';
 import {
     BOOK_CASH_PARENT_CODE,
     CHART_OF_ACCOUNTS,
     DEFAULT_ACCOUNT_TYPES,
+    DEFAULT_WALLET_ACCOUNTS,
     WALLET_ASSET_PARENT_CODE,
     WALLET_LIABILITY_PARENT_CODE,
     normalBalanceFor,
@@ -262,4 +264,73 @@ export async function provisionWorkspaceAccounting(
     const systemMap = await ensureWorkspaceChartOfAccounts(tx, workspaceId, currency);
     await ensureDefaultAccountTypes(tx, workspaceId);
     return systemMap;
+}
+
+/**
+ * The obvious wallets — Mobile Money, Bank, Cash on Hand — a workspace is born
+ * with, so a new user can record a wallet-linked entry without first learning
+ * what an account type is.
+ *
+ * Idempotent by name: an account the user (or a previous seed run) already
+ * created under the same name is left exactly as it is, including its balance
+ * and ledger link. Callers should have provisioned the chart first
+ * (provisionWorkspaceAccounting) so wallet ledger accounts land under the
+ * right parent.
+ */
+export async function seedDefaultWalletAccounts(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    currency: string,
+    userId: string,
+): Promise<void> {
+    await ensureDefaultAccountTypes(tx, workspaceId);
+
+    for (const wallet of DEFAULT_WALLET_ACCOUNTS) {
+        const existing = await tx.account.findFirst({
+            where: { workspaceId, name: wallet.name },
+            select: { id: true },
+        });
+        if (existing) continue;
+
+        const accountType = await tx.accountType.findUnique({
+            where: { name_workspaceId: { name: wallet.accountTypeName, workspaceId } },
+            select: { id: true, name: true },
+        });
+        if (!accountType) continue;
+
+        const account = await tx.account.create({
+            data: {
+                workspaceId,
+                accountTypeId: accountType.id,
+                name: wallet.name,
+                currency,
+                icon: wallet.icon,
+                balance: new Prisma.Decimal(0),
+            },
+        });
+
+        // Real wallets carry real journal lines; give each its ledger account
+        // before the first entry ever touches it.
+        await ensureWalletLedgerAccount(
+            tx,
+            { id: account.id, workspaceId, name: wallet.name, currency },
+            AccountClassification.ASSET,
+        );
+
+        await tx.auditLog.create({
+            data: {
+                userId,
+                workspaceId,
+                action: AuditAction.ACCOUNT_CREATED,
+                resource: 'account',
+                resourceId: account.id,
+                details: {
+                    name: wallet.name,
+                    type: accountType.name,
+                    currency,
+                    seeded: true,
+                } as any,
+            },
+        });
+    }
 }

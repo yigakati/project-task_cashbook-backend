@@ -92,3 +92,24 @@ export const DEFAULT_ACCOUNT_TYPES = [
     { name: 'Credit Card', classification: 'LIABILITY' },
     { name: 'Loan', classification: 'LIABILITY' },
 ] as const;
+
+/**
+ * The obvious wallets every workspace is born with: the ways East-African
+ * businesses actually hold money. Each maps onto its DEFAULT_ACCOUNT_TYPES
+ * counterpart, so a user adding another bank account later lands on the same
+ * "Bank" type and the taxonomy stays one thing.
+ *
+ * Mobile money is split per carrier — Airtel Money and MTN MoMo — because that
+ * is how people hold it: separate floats on separate phones. Both stay under
+ * the one "Mobile Money" account type, so reports and type filters still see
+ * them as one class of wallet.
+ *
+ * Icons come from the frontend's ACCOUNT_ICONS list — pick values that render
+ * there, or the wallet shows the fallback glyph.
+ */
+export const DEFAULT_WALLET_ACCOUNTS = [
+    { name: 'Airtel Money', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+    { name: 'MTN MoMo', accountTypeName: 'Mobile Money', icon: 'Wallet' },
+    { name: 'Bank', accountTypeName: 'Bank', icon: 'Landmark' },
+    { name: 'Cash on Hand', accountTypeName: 'Cash', icon: 'Banknote' },
+] as const;

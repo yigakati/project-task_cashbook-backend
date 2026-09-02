@@ -144,6 +144,27 @@ Manage how the invoice PDF looks.
 
 ---
 
+## 3b. Seeded Wallet Accounts (new workspaces)
+
+Every **newly created** workspace — personal (local signup or OAuth) or business — is born with four wallet accounts, so users can attach wallet-linked entries before learning what an account type is:
+
+| Account | AccountType | Icon | Currency |
+|---|---|---|---|
+| Airtel Money | Mobile Money (ASSET) | `HandCoins` | workspace default |
+| MTN MoMo | Mobile Money (ASSET) | `Wallet` | workspace default |
+| Bank | Bank (ASSET) | `Landmark` | workspace default |
+| Cash on Hand | Cash (ASSET) | `Banknote` | workspace default |
+
+Mobile money is seeded per carrier (separate floats), but both ride the one "Mobile Money" account type so type filters and reports still see them as one class. Note: manual payment-mode management is retired in the UI — payment modes auto-materialize per wallet account (`POST /payment-modes/:workspaceId/for-account/:accountId`), so the Categories page in settings offers only expense/income tabs.
+
+- Balances start at 0 (no opening-balance journals are posted by seeding).
+- Each wallet carries its ledger account (wallet movements post real journal lines).
+- Icon values come from the frontend `ACCOUNT_ICONS` list in `src/types/account.ts`.
+- Seeding is **idempotent by name**: an account the user already created under the same name (including in a re-run) is left untouched. Personal workspaces also get the full chart of accounts + default account types at signup now.
+- Existing workspaces are unchanged (no backfill); users there create accounts manually as before.
+
+---
+
 ## 4. Peer Links (`/api/v1/peer-links` & `/api/v1/cashbooks/:cashbookId/peer-links`)
 
 Peer Links are loan agreements between two **platform users**. The initiator proposes from one of their books; **nothing touches any book until the counterparty accepts and chooses one of their own books**. On acceptance, two mirrored obligations are created atomically — a RECEIVABLE on the lender's book, a PAYABLE on the borrower's — so the platform's audit trail is the shared proof of the loan.
