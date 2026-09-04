@@ -561,10 +561,13 @@ export class InventoryService {
             const item = await prisma.inventoryItem.findUnique({ where: { id: itemId } });
             const costMethod: InventoryCostMethod = item.costMethod;
 
-            // Negative stock guard
-            if (!item.allowNegativeStock && stock.quantityOnHand < quantity) {
+            // Negative stock guard. Reserved units — promised to pending
+            // cross-workspace rental agreements — are on hand but not
+            // available: the promise outranks a later sale or rental.
+            const availableQty = stock.quantityOnHand - (stock.quantityReserved || 0);
+            if (!item.allowNegativeStock && availableQty < quantity) {
                 throw new AppError(
-                    `Insufficient stock. Available: ${stock.quantityOnHand}, Requested: ${quantity}`,
+                    `Insufficient stock. Available: ${availableQty}, Requested: ${quantity}`,
                     400,
                     'INSUFFICIENT_STOCK'
                 );

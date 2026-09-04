@@ -24,63 +24,67 @@ model User {
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
 
-  refreshTokens         RefreshToken[]
-  loginHistory          LoginHistory[]
-  ownedWorkspaces       Workspace[]             @relation("WorkspaceOwner")
-  workspaceMemberships  WorkspaceMember[]
-  cashbookMemberships   CashbookMember[]
-  entries               Entry[]
-  entryAudits           EntryAudit[]
-  deleteRequests        DeleteRequest[]         @relation("DeleteRequester")
-  deleteReviews         DeleteRequest[]         @relation("DeleteReviewer")
-  auditLogs             AuditLog[]
-  financialAuditLogs    FinancialAuditLog[]
-  sentInvites           PendingInvite[]         @relation("InviteSender")
-  projectsCreated       Project[]               @relation("ProjectCreator")
-  projectMemberships    ProjectMember[]
-  tasksCreated          Task[]                  @relation("TaskCreator")
-  taskAssignments       TaskAssignment[]        @relation("TaskAssignee")
-  taskAssigned          TaskAssignment[]        @relation("TaskAssigner")
-  taskComments          TaskComment[]
-  checklistItemsDone    TaskChecklistItem[]     @relation("ChecklistCompleter")
-  taskRequestsMade      TaskAssignmentRequest[] @relation("TaskRequestRequester")
-  taskRequestsReviewed  TaskAssignmentRequest[] @relation("TaskRequestReviewer")
-  taskReportsWritten    TaskReport[]            @relation("TaskReportAuthor")
-  expenseClaimsMade     TaskExpenseClaim[]      @relation("ExpenseClaimant")
-  expenseClaimsReviewed TaskExpenseClaim[]      @relation("ExpenseReviewer")
-  staffContacts         Contact[]
-  taskReportsReviewed   TaskReport[]            @relation("TaskReportReviewer")
-  timeEntries           TimeEntry[]
-  timeEntriesCreated    TimeEntry[]             @relation("TimeEntryCreator")
-  workSessions          WorkSession[]
-  workSchedules         WorkSchedule[]
-  attendanceDays        AttendanceDay[]
-  leaveRequests         LeaveRequest[]          @relation("LeaveRequester")
-  leaveReviewed         LeaveRequest[]          @relation("LeaveReviewer")
-  overtimeRequests      OvertimeRequest[]       @relation("OvertimeRequester")
-  overtimeReviewed      OvertimeRequest[]       @relation("OvertimeReviewer")
-  attendanceFlags       AttendanceFlag[]        @relation("FlaggedUser")
-  flagsWaived           AttendanceFlag[]        @relation("FlagWaiver")
-  workReports           WorkReport[]            @relation("WorkReportAuthor")
-  workReportsReviewed   WorkReport[]            @relation("WorkReportReviewer")
-  workSessionsAdjusted  WorkSession[]           @relation("WorkSessionAdjuster")
-  workSessionsClosed    WorkSession[]           @relation("WorkSessionCloser")
-  notifications         Notification[]
-  journalEntries        JournalEntry[]
-  featuresEnabled       WorkspaceFeature[]      @relation("FeatureEnabler")
-  ticketDaysOpened      TicketDay[]             @relation("TicketDayOpener")
-  ticketDaysClosed      TicketDay[]             @relation("TicketDayCloser")
-  ticketShifts          TicketShift[]           @relation("ShiftAttendant")
-  ticketShiftsClosed    TicketShift[]           @relation("ShiftCloser")
-  ticketSales           TicketSale[]            @relation("TicketSeller")
-  ticketSalesVoided     TicketSale[]            @relation("TicketVoider")
-  membershipsIssued     Membership[]            @relation("MembershipIssuer")
-  apiKeysCreated        ApiKey[]                @relation("ApiKeyCreator")
-  apiKeysRevoked        ApiKey[]                @relation("ApiKeyRevoker")
-  linkedIdentities      LinkedIdentity[]
-  settlementsRecorded   PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
-  peerLinksInitiated    PeerLink[]              @relation("PeerLinkInitiator")
-  peerLinksReceived     PeerLink[]              @relation("PeerLinkCounterparty")
+  refreshTokens            RefreshToken[]
+  loginHistory             LoginHistory[]
+  ownedWorkspaces          Workspace[]             @relation("WorkspaceOwner")
+  workspaceMemberships     WorkspaceMember[]
+  cashbookMemberships      CashbookMember[]
+  entries                  Entry[]
+  entryAudits              EntryAudit[]
+  deleteRequests           DeleteRequest[]         @relation("DeleteRequester")
+  deleteReviews            DeleteRequest[]         @relation("DeleteReviewer")
+  auditLogs                AuditLog[]
+  financialAuditLogs       FinancialAuditLog[]
+  sentInvites              PendingInvite[]         @relation("InviteSender")
+  projectsCreated          Project[]               @relation("ProjectCreator")
+  projectMemberships       ProjectMember[]
+  tasksCreated             Task[]                  @relation("TaskCreator")
+  taskAssignments          TaskAssignment[]        @relation("TaskAssignee")
+  taskAssigned             TaskAssignment[]        @relation("TaskAssigner")
+  taskComments             TaskComment[]
+  checklistItemsDone       TaskChecklistItem[]     @relation("ChecklistCompleter")
+  taskRequestsMade         TaskAssignmentRequest[] @relation("TaskRequestRequester")
+  taskRequestsReviewed     TaskAssignmentRequest[] @relation("TaskRequestReviewer")
+  taskReportsWritten       TaskReport[]            @relation("TaskReportAuthor")
+  expenseClaimsMade        TaskExpenseClaim[]      @relation("ExpenseClaimant")
+  expenseClaimsReviewed    TaskExpenseClaim[]      @relation("ExpenseReviewer")
+  staffContacts            Contact[]
+  taskReportsReviewed      TaskReport[]            @relation("TaskReportReviewer")
+  timeEntries              TimeEntry[]
+  timeEntriesCreated       TimeEntry[]             @relation("TimeEntryCreator")
+  workSessions             WorkSession[]
+  workSchedules            WorkSchedule[]
+  attendanceDays           AttendanceDay[]
+  leaveRequests            LeaveRequest[]          @relation("LeaveRequester")
+  leaveReviewed            LeaveRequest[]          @relation("LeaveReviewer")
+  overtimeRequests         OvertimeRequest[]       @relation("OvertimeRequester")
+  overtimeReviewed         OvertimeRequest[]       @relation("OvertimeReviewer")
+  attendanceFlags          AttendanceFlag[]        @relation("FlaggedUser")
+  flagsWaived              AttendanceFlag[]        @relation("FlagWaiver")
+  workReports              WorkReport[]            @relation("WorkReportAuthor")
+  workReportsReviewed      WorkReport[]            @relation("WorkReportReviewer")
+  workSessionsAdjusted     WorkSession[]           @relation("WorkSessionAdjuster")
+  workSessionsClosed       WorkSession[]           @relation("WorkSessionCloser")
+  notifications            Notification[]
+  journalEntries           JournalEntry[]
+  featuresEnabled          WorkspaceFeature[]      @relation("FeatureEnabler")
+  ticketDaysOpened         TicketDay[]             @relation("TicketDayOpener")
+  ticketDaysClosed         TicketDay[]             @relation("TicketDayCloser")
+  ticketShifts             TicketShift[]           @relation("ShiftAttendant")
+  ticketShiftsClosed       TicketShift[]           @relation("ShiftCloser")
+  ticketSales              TicketSale[]            @relation("TicketSeller")
+  ticketSalesVoided        TicketSale[]            @relation("TicketVoider")
+  membershipsIssued        Membership[]            @relation("MembershipIssuer")
+  apiKeysCreated           ApiKey[]                @relation("ApiKeyCreator")
+  apiKeysRevoked           ApiKey[]                @relation("ApiKeyRevoker")
+  linkedIdentities         LinkedIdentity[]
+  settlementsRecorded      PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
+  peerLinksInitiated       PeerLink[]              @relation("PeerLinkInitiator")
+  peerLinksReceived        PeerLink[]              @relation("PeerLinkCounterparty")
+  stockTransfersSent       StockTransfer[]         @relation("StockTransferSender")
+  stockTransfersReceived   StockTransfer[]         @relation("StockTransferRecipient")
+  rentalAgreementsLent     RentalAgreement[]       @relation("RentalAgreementLender")
+  rentalAgreementsBorrowed RentalAgreement[]       @relation("RentalAgreementBorrower")
 
   @@unique([provider, providerId])
   @@map("users")
@@ -204,6 +208,9 @@ model Workspace {
   peerLinksInitiated     PeerLink[]              @relation("PeerLinkInitiatorWorkspace")
   peerLinksCounterparty  PeerLink[]              @relation("PeerLinkCounterpartyWorkspace")
   unitsOfMeasure         UnitOfMeasure[]
+  stockTransfersSent     StockTransfer[]         @relation("StockTransferSenderWorkspace")
+  stockTransfersReceived StockTransfer[]         @relation("StockTransferRecipientWorkspace")
+  rentalAgreements       RentalAgreement[]       @relation("RentalAgreementLenderWorkspace")
   auditLogs              AuditLog[]
   financialAuditLogs     FinancialAuditLog[]
   pendingInvites         PendingInvite[]
@@ -413,6 +420,8 @@ model Entry {
   membership          Membership?
   settlementRecorded  PeerLinkSettlement[] @relation("PeerLinkSettlementRecorded")
   settlementMatched   PeerLinkSettlement[] @relation("PeerLinkSettlementMatch")
+  agreementExpense    RentalAgreement?     @relation("RentalAgreementExpense")
+  agreementIncome     RentalAgreement?     @relation("RentalAgreementIncome")
 
   @@unique([cashbookId, integrationApiKeyId, externalRef])
   @@index([cashbookId])
@@ -1205,6 +1214,7 @@ enum InventoryReferenceType {
   INVOICE
   MANUAL
   RENTAL
+  STOCK_TRANSFER
 }
 
 enum InventoryCommercialMode {
@@ -1253,13 +1263,16 @@ model InventoryItem {
   createdAt               DateTime                @default(now()) @map("created_at")
   updatedAt               DateTime                @updatedAt @map("updated_at")
 
-  workspace        Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  stock            InventoryStock?
-  transactions     InventoryTransaction[]
-  lots             InventoryLot[]
-  productsServices ProductService[]
-  invoiceItems     InvoiceItem[]
-  rentalLines      InventoryRentalLine[]
+  workspace              Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  stock                  InventoryStock?
+  transactions           InventoryTransaction[]
+  lots                   InventoryLot[]
+  stockTransfersSent     StockTransfer[]        @relation("StockTransferItem")
+  stockTransfersReceived StockTransfer[]        @relation("StockTransferRecipientItem")
+  rentalAgreements       RentalAgreement[]      @relation("RentalAgreementItem")
+  productsServices       ProductService[]
+  invoiceItems           InvoiceItem[]
+  rentalLines            InventoryRentalLine[]
 
   @@unique([workspaceId, sku])
   @@index([workspaceId])
@@ -1288,6 +1301,7 @@ model InventoryRental {
   customer  Contact               @relation(fields: [customerId], references: [id], onDelete: Restrict)
   invoice   Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   lines     InventoryRentalLine[]
+  agreement RentalAgreement?      @relation("RentalAgreementRental")
 
   @@index([workspaceId])
   @@index([customerId])
@@ -1321,6 +1335,9 @@ model InventoryStock {
   quantityOnHand    Int     @default(0) @map("quantity_on_hand")
   /// Units currently out on active rentals (not permanently sold).
   quantityRentedOut Int     @default(0) @map("quantity_rented_out")
+  /// Units promised to pending cross-workspace rental agreements. Not yet
+  /// gone, but not available to sell or rent until the agreement resolves.
+  quantityReserved  Int     @default(0) @map("quantity_reserved")
   averageCost       Decimal @default(0) @map("average_cost") @db.Decimal(20, 4)
 
   item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
@@ -1403,6 +1420,122 @@ model LotConsumption {
 }
 
 // ─── Catalog (Products/Services + Tax) ─────────────────
+
+// ─── Cross-workspace stock transfers ───────────────────
+//
+// One platform user moving stock to another, with the app as the shared
+// proof. The sender proposes from one of their items; the recipient accepts
+// into a workspace of their choosing (picking a matching item or creating
+// one). On acceptance both stock movements post atomically — TRANSFER_OUT on
+// the sender's side, TRANSFER_IN at the sender's per-unit value on the
+// receiver's — so both books agree on what moved and what it was worth.
+
+enum StockTransferStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+model StockTransfer {
+  id     String              @id @default(uuid()) @db.Uuid
+  status StockTransferStatus @default(PENDING)
+
+  senderUserId      String  @map("sender_user_id") @db.Uuid
+  senderWorkspaceId String  @map("sender_workspace_id") @db.Uuid
+  senderItemId      String  @map("sender_item_id") @db.Uuid
+  quantity          Int
+  /// The sender's per-unit cost at proposal — informational. The value that
+  /// actually moves is computed at acceptance from the sender's current
+  /// weighted average, so the two sides can never disagree.
+  proposedUnitCost  Decimal @map("proposed_unit_cost") @db.Decimal(20, 4)
+
+  recipientUserId      String? @map("recipient_user_id") @db.Uuid
+  /// Chosen by the recipient at acceptance.
+  recipientWorkspaceId String? @map("recipient_workspace_id") @db.Uuid
+  /// The recipient's item that received the stock — picked from their
+  /// inventory or auto-created from the sender's details.
+  recipientItemId      String? @map("recipient_item_id") @db.Uuid
+
+  notes       String?
+  respondedAt DateTime? @map("responded_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  senderUser         User           @relation("StockTransferSender", fields: [senderUserId], references: [id])
+  recipientUser      User?          @relation("StockTransferRecipient", fields: [recipientUserId], references: [id])
+  senderWorkspace    Workspace      @relation("StockTransferSenderWorkspace", fields: [senderWorkspaceId], references: [id], onDelete: Cascade)
+  senderItem         InventoryItem  @relation("StockTransferItem", fields: [senderItemId], references: [id], onDelete: Cascade)
+  recipientWorkspace Workspace?     @relation("StockTransferRecipientWorkspace", fields: [recipientWorkspaceId], references: [id], onDelete: SetNull)
+  recipientItem      InventoryItem? @relation("StockTransferRecipientItem", fields: [recipientItemId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([senderUserId])
+  @@index([recipientUserId])
+  @@map("stock_transfers")
+}
+
+// ─── Cross-workspace rental agreements ─────────────────
+//
+// Lending an item to another platform user under a contract they accept.
+// Proposing reserves the units (they cannot be sold or rented elsewhere while
+// the agreement awaits a decision); acceptance converts the reservation into
+// a normal rental on the lender's books with the borrower as counterparty.
+// Returns flow through the ordinary rental return.
+
+enum RentalAgreementStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+model RentalAgreement {
+  id     String                @id @default(uuid()) @db.Uuid
+  status RentalAgreementStatus @default(PENDING)
+
+  lenderUserId      String           @map("lender_user_id") @db.Uuid
+  lenderWorkspaceId String           @map("lender_workspace_id") @db.Uuid
+  lenderItemId      String           @map("lender_item_id") @db.Uuid
+  quantity          Int
+  periodUnit        RentalPeriodUnit @map("period_unit")
+  periodCount       Int              @default(1) @map("period_count")
+  startDate         DateTime         @map("start_date")
+  endDate           DateTime?        @map("end_date")
+  /// Optional charge per period — a loan may be free. Payment, when charged,
+  /// is recorded through the ordinary entry flow, not by the agreement.
+  rate              Decimal?         @db.Decimal(20, 4)
+
+  borrowerUserId      String  @map("borrower_user_id") @db.Uuid
+  /// The borrower's workspace, chosen at acceptance — provenance for the
+  /// proof, and where their side of the story lives.
+  borrowerWorkspaceId String? @map("borrower_workspace_id") @db.Uuid
+  /// The rental created on the lender's books at acceptance.
+  rentalId            String? @unique @map("rental_id") @db.Uuid
+  /// The borrower's expense entry, once recorded. Unique-set: null until the
+  /// one-time record happens, then immutable — the button can never pay twice.
+  expenseEntryId      String? @unique @map("expense_entry_id") @db.Uuid
+  /// The lender's income entry, once recorded. Same one-time contract.
+  incomeEntryId       String? @unique @map("income_entry_id") @db.Uuid
+
+  notes       String?
+  respondedAt DateTime? @map("responded_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  lenderUser      User             @relation("RentalAgreementLender", fields: [lenderUserId], references: [id])
+  borrowerUser    User             @relation("RentalAgreementBorrower", fields: [borrowerUserId], references: [id])
+  lenderWorkspace Workspace        @relation("RentalAgreementLenderWorkspace", fields: [lenderWorkspaceId], references: [id], onDelete: Cascade)
+  lenderItem      InventoryItem    @relation("RentalAgreementItem", fields: [lenderItemId], references: [id], onDelete: Cascade)
+  rental          InventoryRental? @relation("RentalAgreementRental", fields: [rentalId], references: [id], onDelete: SetNull)
+  expenseEntry    Entry?           @relation("RentalAgreementExpense", fields: [expenseEntryId], references: [id], onDelete: SetNull)
+  incomeEntry     Entry?           @relation("RentalAgreementIncome", fields: [incomeEntryId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([lenderUserId])
+  @@index([borrowerUserId])
+  @@map("rental_agreements")
+}
 
 // ─── Units of Measure ──────────────────────────────────
 //
@@ -2505,6 +2638,10 @@ enum NotificationType {
   PEER_LINK_DECIDED
   PEER_LINK_PAYMENT_RECORDED
   PEER_LINK_SETTLEMENT_DECIDED
+  STOCK_TRANSFER_RECEIVED
+  STOCK_TRANSFER_DECIDED
+  RENTAL_AGREEMENT_RECEIVED
+  RENTAL_AGREEMENT_DECIDED
 }
 
 /// What a notification points at, so it can link to something other than a task
@@ -2521,6 +2658,8 @@ enum NotificationEntityType {
   ATTENDANCE_FLAG
   PEER_LINK
   PEER_LINK_SETTLEMENT
+  STOCK_TRANSFER
+  RENTAL_AGREEMENT
 }
 
 model Notification {
