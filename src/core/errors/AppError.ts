@@ -35,6 +35,25 @@ export class AuthenticationError extends AppError {
     }
 }
 
+/**
+ * Thrown when a user attempts to log in but has not yet verified their email.
+ * Uses a distinct `code` so the client can redirect to /verify-email instead
+ * of showing a generic "wrong credentials" error. The user's email is included
+ * so the client can pre-populate the verify-email page without a second lookup.
+ */
+export class EmailNotVerifiedError extends AppError {
+    public readonly email: string;
+
+    constructor(email: string) {
+        super(
+            'Please verify your email before logging in.',
+            StatusCodes.UNAUTHORIZED,
+            'EMAIL_NOT_VERIFIED',
+        );
+        this.email = email;
+    }
+}
+
 export class AuthorizationError extends AppError {
     constructor(message = 'Insufficient permissions') {
         super(message, StatusCodes.FORBIDDEN, 'AUTHORIZATION_ERROR');

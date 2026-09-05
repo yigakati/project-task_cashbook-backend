@@ -11,6 +11,7 @@ import {
     AuthenticationError,
     ConflictError,
     AppError,
+    EmailNotVerifiedError,
 } from '../../core/errors/AppError';
 import { JwtPayload, AuditAction, WorkspaceType } from '../../core/types';
 import {
@@ -150,7 +151,11 @@ export class AuthService {
         }
 
         if (!user.emailVerified) {
-            throw new AuthenticationError('Please verify your email before logging in');
+            // Trigger a fresh code so the user can verify immediately after redirect.
+            // Fire-and-forget: we never tell the client whether the resend succeeded
+            // to avoid leaking account-existence information via timing.
+            void this.resendVerification(user.email);
+            throw new EmailNotVerifiedError(user.email);
         }
 
         // Check for suspicious activity

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { StatusCodes } from 'http-status-codes';
-import { AppError } from '../core/errors/AppError';
+import { AppError, EmailNotVerifiedError } from '../core/errors/AppError';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { ApiResponse } from '../core/types';
@@ -12,12 +12,17 @@ export function errorHandler(
     _next: NextFunction
 ): void {
     if (err instanceof AppError) {
-        const response: ApiResponse & { code?: string } = {
+        const response: ApiResponse & { code?: string; email?: string } = {
             success: false,
             message: err.message,
             code: err.code,
             ...(err.constructor.name === 'ValidationError' && {
                 errors: (err as any).errors,
+            }),
+            // Include the email so the client can redirect to /verify-email
+            // pre-populated without requiring the user to re-enter it.
+            ...(err instanceof EmailNotVerifiedError && {
+                email: err.email,
             }),
         };
 

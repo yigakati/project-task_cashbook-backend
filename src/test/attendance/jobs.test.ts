@@ -143,6 +143,65 @@ describe('auto-close', () => {
         expect(after.clockOut!.getTime()).toBe(realClockOut.getTime());
     });
 
+    it('closes a break that began after the session’s credited end at its own start', async () => {
+        // The production incident: a lunch tap a few seconds PAST the
+        // scheduled end, on a session somebody then forgot to clock out.
+        // Ending that break at the credited end would write ended_at <
+        // started_at — the work_session_presence_ordered CHECK rejects it,
+        // and the tick died on this row every five minutes for weeks.
+        const f = await fixture();
+        const session = await forgottenSession(f.workspace.id, f.member.id, 6);
+        const lateBreakStart = new Date(session.scheduledEndUtc!.getTime() + 14_000);
+        await testPrisma.workSessionPresence.create({
+            data: {
+                sessionId: session.id,
+                workspaceId: f.workspace.id,
+                userId: f.member.id,
+                status: 'LUNCH',
+                startedAt: lateBreakStart,
+            },
+        });
+
+        await autoCloseForgottenSessions();
+
+        // The session closed at its scheduled end as always…
+        const after = await testPrisma.workSession.findUniqueOrThrow({ where: { id: session.id } });
+        expect(after.status).toBe('AUTO_CLOSED');
+        expect(after.clockOut!.getTime()).toBe(session.scheduledEndUtc!.getTime());
+
+        // …and the late break closed at its own start — never before it.
+        const breakRow = await testPrisma.workSessionPresence.findFirstOrThrow({
+            where: { sessionId: session.id },
+        });
+        expect(breakRow.endedAt).not.toBeNull();
+        expect(breakRow.endedAt!.getTime()).toBeGreaterThanOrEqual(breakRow.startedAt.getTime());
+        expect(breakRow.endedAt!.getTime()).toBe(lateBreakStart.getTime());
+    });
+
+    it('keeps sweeping when one session’s data cannot be closed cleanly', async () => {
+        // Two forgotten sessions; the first carries the incident’s poisoned
+        // shape. Before the clamp + per-session error boundary, the throw
+        // aborted the whole sweep and the second session stayed open forever.
+        const f = await fixture();
+        const poisoned = await forgottenSession(f.workspace.id, f.member.id, 6);
+        await testPrisma.workSessionPresence.create({
+            data: {
+                sessionId: poisoned.id,
+                workspaceId: f.workspace.id,
+                userId: f.member.id,
+                status: 'LUNCH',
+                startedAt: new Date(poisoned.scheduledEndUtc!.getTime() + 60_000),
+            },
+        });
+        const healthy = await forgottenSession(f.workspace.id, f.owner.id, 7);
+
+        const closed = await autoCloseForgottenSessions();
+
+        expect(closed).toBe(2);
+        const second = await testPrisma.workSession.findUniqueOrThrow({ where: { id: healthy.id } });
+        expect(second.status).toBe('AUTO_CLOSED');
+    });
+
     it('falls back to a ceiling when there is no schedule to measure against', async () => {
         const f = await fixture();
         const clockIn = new Date(Date.now() - 20 * 3600_000);

@@ -93,6 +93,10 @@ async function sendWrapUpReminders(): Promise<number> {
  * would hand out a sixteen-hour day for a forgotten tap, and over-crediting is
  * much harder to unpick than under-crediting — the person can ask for a
  * correction, but nobody audits hours that look generous.
+ *
+ * Each session is closed in its own error boundary: one poisoned row must not
+ * wedge the sweep (it once did — a break started after the session's
+ * scheduled end kept the whole tick failing every five minutes for weeks).
  */
 async function autoCloseForgottenSessions(): Promise<number> {
     const cutoff = new Date(Date.now() - AUTO_CLOSE_GRACE_MINUTES * 60_000);
@@ -123,54 +127,83 @@ async function autoCloseForgottenSessions(): Promise<number> {
             Math.floor((creditedEnd.getTime() - session.clockIn.getTime()) / 60_000),
         );
 
-        // Conditional on still being open. If the person clocked out a second
-        // ago, rowCount is 0 and this becomes a no-op rather than overwriting
-        // their real clock-out with an invented one.
-        const claimed = await prisma.$transaction(async (tx) => {
-            await tx.workSessionPresence.updateMany({
-                where: { sessionId: session.id, endedAt: null },
-                data: { endedAt: creditedEnd },
-            });
-            const result = await tx.workSession.updateMany({
-                where: { id: session.id, clockOut: null },
-                data: {
-                    clockOut: creditedEnd,
-                    totalMinutes: minutes,
-                    workedMinutes: minutes,
-                    status: WorkSessionStatus.AUTO_CLOSED,
-                    presenceStatus: null,
-                    autoClosedAt: new Date(),
-                    closureReason: 'FORGOTTEN_CLOCK_OUT',
-                },
-            });
-            if (result.count === 0) return false;
+        try {
+            // Conditional on still being open. If the person clocked out a
+            // second ago, rowCount is 0 and this becomes a no-op rather than
+            // overwriting their real clock-out with an invented one.
+            const claimed = await prisma.$transaction(async (tx) => {
+                // A break can legitimately have started after the session's
+                // scheduled end (a lunch tap a few seconds past the bell on a
+                // day somebody then forgot to close). Ending it at the
+                // credited end would put ended_at before started_at, which the
+                // work_session_presence_ordered CHECK forbids — so the break
+                // is ended no earlier than it began, closing as a zero-length
+                // break: minimal invention, correctable. (Done through the
+                // Prisma API rather than SQL GREATEST because these columns
+                // are naive timestamps; a timestamptz comparison would drag
+                // the session timezone into it and shift the stored value.)
+                const openBreak = await tx.workSessionPresence.findFirst({
+                    where: { sessionId: session.id, endedAt: null },
+                    select: { id: true, startedAt: true },
+                });
+                if (openBreak) {
+                    await tx.workSessionPresence.update({
+                        where: { id: openBreak.id },
+                        data: {
+                            endedAt: openBreak.startedAt > creditedEnd
+                                ? openBreak.startedAt
+                                : creditedEnd,
+                        },
+                    });
+                }
+                const result = await tx.workSession.updateMany({
+                    where: { id: session.id, clockOut: null },
+                    data: {
+                        clockOut: creditedEnd,
+                        totalMinutes: minutes,
+                        workedMinutes: minutes,
+                        status: WorkSessionStatus.AUTO_CLOSED,
+                        presenceStatus: null,
+                        autoClosedAt: new Date(),
+                        closureReason: 'FORGOTTEN_CLOCK_OUT',
+                    },
+                });
+                if (result.count === 0) return false;
 
-            await tx.attendanceFlag.createMany({
-                data: [{
-                    workspaceId: session.workspaceId,
-                    userId: session.userId,
-                    businessDate: session.businessDate,
-                    type: 'MISSED_CLOCK_OUT',
-                    sessionId: session.id,
-                }],
-                skipDuplicates: true,
+                await tx.attendanceFlag.createMany({
+                    data: [{
+                        workspaceId: session.workspaceId,
+                        userId: session.userId,
+                        businessDate: session.businessDate,
+                        type: 'MISSED_CLOCK_OUT',
+                        sessionId: session.id,
+                    }],
+                    skipDuplicates: true,
+                });
+                return true;
             });
-            return true;
-        });
 
-        if (!claimed) continue;
+            if (!claimed) continue;
 
-        await dispatch({
-            userId: session.userId,
-            workspaceId: session.workspaceId,
-            type: 'SESSION_AUTO_CLOSED',
-            title: 'We closed your session for you',
-            body: 'You did not clock out, so the day was closed at your scheduled end time. Ask for a correction if that is wrong.',
-            entityType: 'WORK_SESSION',
-            entityId: session.id,
-            groupKey: `autoclose:${session.id}`,
-        });
-        closed += 1;
+            await dispatch({
+                userId: session.userId,
+                workspaceId: session.workspaceId,
+                type: 'SESSION_AUTO_CLOSED',
+                title: 'We closed your session for you',
+                body: 'You did not clock out, so the day was closed at your scheduled end time. Ask for a correction if that is wrong.',
+                entityType: 'WORK_SESSION',
+                entityId: session.id,
+                groupKey: `autoclose:${session.id}`,
+            });
+            closed += 1;
+        } catch (error) {
+            // The sweep must survive any single session's data oddities — a
+            // wedged tick stops every other session from ever auto-closing.
+            logger.error('[Attendance] Auto-close failed for one session; continuing', {
+                sessionId: session.id,
+                error: (error as Error).message,
+            });
+        }
     }
     return closed;
 }
