@@ -5,7 +5,11 @@ import { NotFoundError, AuthorizationError, AppError } from '../../core/errors/A
 import { WorkspaceType, WorkspaceRole, AuditAction } from '../../core/types';
 import { CreateWorkspaceDto, UpdateWorkspaceDto } from './workspaces.dto';
 import { assertSupportedBaseCurrency } from '../../core/finance';
-import { provisionWorkspaceAccounting, seedDefaultWalletAccounts } from '../../core/ledger/coa.seed';
+import {
+    provisionWorkspaceAccounting,
+    seedDefaultWalletAccounts,
+    seedDefaultCashbook,
+} from '../../core/ledger/coa.seed';
 
 @injectable()
 export class WorkspacesService {
@@ -57,9 +61,12 @@ export class WorkspacesService {
             // could not even create a wallet, since nothing seeded AccountType.
             await provisionWorkspaceAccounting(tx, ws.id, defaultCurrency);
 
-            // The three obvious wallets — Mobile Money, Bank, Cash on Hand —
-            // so the workspace opens with something to attach entries to.
+            // The country's obvious wallets (by currency: M-Pesa, MTN MoMo,
+            // PayPal, ...) plus the universal Bank and Cash on Hand, so the
+            // workspace opens with something to attach entries to — and one
+            // cashbook so the first entry has somewhere to live.
             await seedDefaultWalletAccounts(tx, ws.id, defaultCurrency, userId);
+            await seedDefaultCashbook(tx, ws.id, defaultCurrency, userId);
 
             await tx.auditLog.create({
                 data: {

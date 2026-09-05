@@ -12,6 +12,30 @@ export type EastAfricanCurrencyCode = typeof EAST_AFRICAN_CURRENCY_CODES[number]
 export const SUPPORTED_BASE_CURRENCY_CODES = [...EAST_AFRICAN_CURRENCY_CODES, 'USD'] as const;
 export type SupportedBaseCurrencyCode = typeof SUPPORTED_BASE_CURRENCY_CODES[number];
 
+/**
+ * The home currency of each country the product serves. A user's country,
+ * captured at signup, decides the currency their personal workspace is born
+ * in — and through it, the wallets they are seeded with.
+ */
+export const COUNTRY_CURRENCIES: Record<string, SupportedBaseCurrencyCode> = {
+    UG: 'UGX',
+    KE: 'KES',
+    TZ: 'TZS',
+    RW: 'RWF',
+    BI: 'BIF',
+    SS: 'SSP',
+    ET: 'ETB',
+    US: 'USD',
+};
+
+/** The workspace currency for an ISO 3166-1 alpha-2 country; anything else
+ *  falls back to the product's home base (UGX), preserving the behavior of
+ *  signups that predate the country question. */
+export function currencyForCountry(country: string | null | undefined): SupportedBaseCurrencyCode {
+    const code = (country || '').trim().toUpperCase();
+    return COUNTRY_CURRENCIES[code] ?? 'UGX';
+}
+
 /** Normalize ISO-like currency codes (UGX, USD, KES). */
 export function normalizeCurrency(code: string | null | undefined, fallback = 'UGX'): string {
     const c = (code || fallback).trim().toUpperCase();

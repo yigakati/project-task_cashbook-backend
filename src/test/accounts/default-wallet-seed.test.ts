@@ -1,12 +1,13 @@
 /**
- * The wallets a workspace is born with.
+ * What a workspace is born with: wallets and its first cashbook.
  *
  * A new user — local signup, OAuth signup, or a new business — should never
  * have to learn what an account type is before recording their first
- * wallet-linked entry. These tests pin down that the four obvious wallets
- * (Airtel Money, MTN MoMo, Bank, Cash on Hand) arrive with the workspace,
- * wired to real ledger accounts, without disturbing anything the user
- * already created.
+ * wallet-linked entry, nor what a cashbook is before their first entry. These
+ * tests pin the seeds per currency: the wallets are the ways money is
+ * actually held where that currency circulates (M-Pesa in Kenya, MTN MoMo in
+ * Uganda, PayPal for USD, ...), plus the universal Bank and Cash on Hand,
+ * and one "Cash Journal {year}" book.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Prisma } from '@prisma/client';
@@ -14,23 +15,29 @@ import { resetDatabase, testPrisma } from '../setup';
 import { resolveService } from '../container';
 import { AuthService } from '../../modules/auth/auth.service';
 import { WorkspacesService } from '../../modules/workspaces/workspaces.service';
-import { seedDefaultWalletAccounts } from '../../core/ledger/coa.seed';
+import {
+    seedDefaultWalletAccounts,
+    seedDefaultCashbook,
+} from '../../core/ledger/coa.seed';
+import { WALLET_SEEDS_BY_CURRENCY } from '../../core/ledger/coa.template';
 import { createWorkspace, createUser } from '../factories';
 
 const auth = () => resolveService(AuthService);
 const workspaces = () => resolveService(WorkspacesService);
 
-const SEED_NAMES = ['Airtel Money', 'MTN MoMo', 'Bank', 'Cash on Hand'];
+/** The seeded wallet names for a currency, as the template promises. */
+async function expectSeededWallets(workspaceId: string, currency: string) {
+    const expected = WALLET_SEEDS_BY_CURRENCY[currency];
+    expect(expected).toBeDefined();
 
-/** The wallets, with their types and icons, as the template promises. */
-async function expectSeededWallets(workspaceId: string, currency = 'UGX') {
     const accounts = await testPrisma.account.findMany({
         where: { workspaceId },
         include: { accountType: true },
         orderBy: { name: 'asc' },
     });
 
-    expect(accounts.map((a: any) => a.name).sort()).toEqual([...SEED_NAMES].sort());
+    expect(accounts.map((a: any) => a.name).sort())
+        .toEqual(expected.map((w) => w.name).sort());
 
     for (const account of accounts) {
         expect(account.balance.toString()).toBe('0');
@@ -39,25 +46,25 @@ async function expectSeededWallets(workspaceId: string, currency = 'UGX') {
         // ledger account, so movements post journal lines from day one.
         expect(account.ledgerAccountId).not.toBeNull();
         expect(account.accountType.classification).toBe('ASSET');
+
+        // ...and each landed under its promised account type and icon.
+        const seed = expected.find((w) => w.name === account.name)!;
+        expect(account.accountType.name).toBe(seed.accountTypeName);
+        expect(account.icon).toBe(seed.icon);
     }
+}
 
-    // Both carrier wallets ride the one Mobile Money type — separate floats,
-    // one classification.
-    const airtel = accounts.find((a: any) => a.name === 'Airtel Money')!;
-    expect(airtel.accountType.name).toBe('Mobile Money');
-    expect(airtel.icon).toBe('HandCoins');
-
-    const mtn = accounts.find((a: any) => a.name === 'MTN MoMo')!;
-    expect(mtn.accountType.name).toBe('Mobile Money');
-    expect(mtn.icon).toBe('Wallet');
-
-    const bank = accounts.find((a: any) => a.name === 'Bank')!;
-    expect(bank.accountType.name).toBe('Bank');
-    expect(bank.icon).toBe('Landmark');
-
-    const cash = accounts.find((a: any) => a.name === 'Cash on Hand')!;
-    expect(cash.accountType.name).toBe('Cash');
-    expect(cash.icon).toBe('Banknote');
+/** The workspace is born with exactly one "Cash Journal {year}" book, wired
+ *  to its ledger account. */
+async function expectSeededCashbook(workspaceId: string, currency: string) {
+    const year = new Date().getFullYear();
+    const cashbooks = await testPrisma.cashbook.findMany({
+        where: { workspaceId },
+    });
+    expect(cashbooks).toHaveLength(1);
+    expect(cashbooks[0].name).toBe(`Cash Journal ${year}`);
+    expect(cashbooks[0].currency).toBe(currency);
+    expect(cashbooks[0].cashLedgerAccountId).not.toBeNull();
 }
 
 async function trialBalance(): Promise<string> {
@@ -68,7 +75,7 @@ async function trialBalance(): Promise<string> {
 describe('default wallet seeding', () => {
     beforeEach(resetDatabase);
 
-    it('a local signup gets the wallets with its personal workspace', async () => {
+    it('a local signup gets the wallets and cashbook with its personal workspace', async () => {
         await auth().register({
             email: 'new-user@test.local',
             password: 'Password1!',
@@ -83,31 +90,71 @@ describe('default wallet seeding', () => {
             where: { ownerId: user.id, type: 'PERSONAL' },
         });
 
-        await expectSeededWallets(ws.id);
+        await expectSeededWallets(ws.id, 'UGX');
+        await expectSeededCashbook(ws.id, 'UGX');
 
         // The workspace is born ready to book: chart of accounts and default
         // account types arrived alongside the wallets.
         const chart = await testPrisma.ledgerAccount.count({ where: { workspaceId: ws.id } });
         expect(chart).toBeGreaterThan(0);
         const types = await testPrisma.accountType.count({ where: { workspaceId: ws.id } });
-        expect(types).toBe(5);
+        expect(types).toBe(6);
 
         // Seeding posts nothing — no opening balances, journals stay flat.
         expect(await trialBalance()).toBe('0');
     });
 
-    it('a new business workspace gets the wallets too', async () => {
-        const owner = await createUser();
-        const ws = await workspaces().createBusinessWorkspace(owner.id, {
-            name: 'Seeded Biz',
-            type: 'BUSINESS',
-            defaultCurrency: 'UGX',
-        } as any);
+    it('the signup country decides the personal workspace currency and its wallets', async () => {
+        await auth().register({
+            email: 'kenyan@test.local',
+            password: 'Password1!',
+            firstName: 'Ken',
+            lastName: 'Yan',
+            country: 'KE',
+        });
 
-        await expectSeededWallets(ws.id);
+        const user = await testPrisma.user.findUniqueOrThrow({
+            where: { email: 'kenyan@test.local' },
+        });
+        const ws = await testPrisma.workspace.findFirstOrThrow({
+            where: { ownerId: user.id, type: 'PERSONAL' },
+        });
+
+        expect(ws.defaultCurrency).toBe('KES');
+        await expectSeededWallets(ws.id, 'KES');
+        await expectSeededCashbook(ws.id, 'KES');
     });
 
-    it('a USD-based business is accepted and seeds its wallets in USD', async () => {
+    it('every supported currency seeds its own wallets — the researched set', async () => {
+        const owner = await createUser();
+        for (const [currency, seeds] of Object.entries(WALLET_SEEDS_BY_CURRENCY)) {
+            const ws = await workspaces().createBusinessWorkspace(owner.id, {
+                name: `Biz ${currency}`,
+                type: 'BUSINESS',
+                defaultCurrency: currency,
+            } as any);
+
+            await expectSeededWallets(ws.id, currency);
+            await expectSeededCashbook(ws.id, currency);
+
+            // USD is an online-money currency: PayPal rides the Digital
+            // Wallet type, and no mobile money is seeded.
+            if (currency === 'USD') {
+                const accounts = await testPrisma.account.findMany({
+                    where: { workspaceId: ws.id },
+                    include: { accountType: true },
+                });
+                expect(accounts.some((a: any) => a.accountType.name === 'Digital Wallet')).toBe(true);
+                expect(accounts.some((a: any) => a.accountType.name === 'Mobile Money')).toBe(false);
+            }
+
+            // Every currency's set carries the universal pair.
+            expect(seeds.some((s) => s.name === 'Bank')).toBe(true);
+            expect(seeds.some((s) => s.name === 'Cash on Hand')).toBe(true);
+        }
+    });
+
+    it('a USD-based business is accepted and seeds PayPal, Bank, and Cash on Hand', async () => {
         const owner = await createUser();
         const ws = await workspaces().createBusinessWorkspace(owner.id, {
             name: 'Dollar Biz',
@@ -116,7 +163,12 @@ describe('default wallet seeding', () => {
         } as any);
 
         expect(ws.defaultCurrency).toBe('USD');
-        await expectSeededWallets(ws.id, 'USD');
+        const accounts = await testPrisma.account.findMany({
+            where: { workspaceId: ws.id },
+            orderBy: { name: 'asc' },
+        });
+        expect(accounts.map((a: any) => a.name)).toEqual(['Bank', 'Cash on Hand', 'PayPal']);
+        await expectSeededCashbook(ws.id, 'USD');
     });
 
     it('seeding is idempotent — running it again creates nothing new', async () => {
@@ -124,9 +176,12 @@ describe('default wallet seeding', () => {
         const ws = await createWorkspace(user.id);
 
         await seedDefaultWalletAccounts(testPrisma, ws.id, 'UGX', user.id);
+        await seedDefaultCashbook(testPrisma, ws.id, 'UGX', user.id);
         await seedDefaultWalletAccounts(testPrisma, ws.id, 'UGX', user.id);
+        await seedDefaultCashbook(testPrisma, ws.id, 'UGX', user.id);
 
         expect(await testPrisma.account.count({ where: { workspaceId: ws.id } })).toBe(4);
+        expect(await testPrisma.cashbook.count({ where: { workspaceId: ws.id } })).toBe(1);
     });
 
     it('an account the user already made under the same name is left alone', async () => {
@@ -153,8 +208,9 @@ describe('default wallet seeding', () => {
 
         await seedDefaultWalletAccounts(testPrisma, ws.id, 'UGX', user.id);
 
-        // The other two arrived; the user's Bank row is untouched — same id,
-        // same balance, and no ledger account bolted onto it behind their back.
+        // The other wallets arrived; the user's Bank row is untouched — same
+        // id, same balance, and no ledger account bolted onto it behind their
+        // back.
         const accounts = await testPrisma.account.findMany({
             where: { workspaceId: ws.id },
         });
@@ -165,5 +221,25 @@ describe('default wallet seeding', () => {
         expect(bank.id).toBe(existingBank.id);
         expect(bank.balance.toString()).toBe('50000');
         expect(bank.ledgerAccountId).toBeNull();
+    });
+
+    it('the cashbook seed leaves a workspace with an existing book untouched', async () => {
+        const user = await createUser();
+        const ws = await createWorkspace(user.id);
+
+        await testPrisma.cashbook.create({
+            data: {
+                name: 'My Own Ledger',
+                currency: 'UGX',
+                workspaceId: ws.id,
+            },
+        });
+
+        await seedDefaultCashbook(testPrisma, ws.id, 'UGX', user.id);
+
+        const cashbooks = await testPrisma.cashbook.findMany({
+            where: { workspaceId: ws.id },
+        });
+        expect(cashbooks.map((c: any) => c.name)).toEqual(['My Own Ledger']);
     });
 });

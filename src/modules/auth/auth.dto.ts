@@ -11,6 +11,9 @@ export const registerSchema = z.object({
         .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character'),
     firstName: z.string().min(1, 'First name is required').max(100),
     lastName: z.string().min(1, 'Last name is required').max(100),
+    /** ISO 3166-1 alpha-2 (e.g. UG, KE, US) — decides the currency the
+     *  personal workspace (and its seeded wallets) is born in. */
+    country: z.string().trim().length(2, 'Use the 2-letter country code').optional(),
 });
 
 export const loginSchema = z.object({

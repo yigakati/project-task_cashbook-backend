@@ -37,6 +37,14 @@ router.get(
     controller.getItems.bind(controller) as any
 );
 
+// The inventory page's metric cards — total items, low stock, rentable.
+// Overlapping dimensions computed server-side, immune to list pagination.
+router.get(
+    '/stats',
+    requireWorkspaceMember(WorkspacePermission.VIEW_INVENTORY) as any,
+    controller.getStats.bind(controller) as any
+);
+
 // Get single inventory item
 router.get(
     '/items/:itemId',

@@ -41,6 +41,19 @@ export class InventoryController {
         }
     }
 
+    async getStats(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.service.getStats(req.params.workspaceId as string);
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Inventory stats retrieved',
+                data,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
     async getItem(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.service.getItem(req.params.itemId as string, req.params.workspaceId as string);

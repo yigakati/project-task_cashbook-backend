@@ -138,3 +138,75 @@ describe('units of measure', () => {
         expect(listed.map((u) => u.name)).toEqual(['kg', 'pcs']);
     });
 });
+
+describe('inventory stats (the metric cards)', () => {
+    beforeEach(resetDatabase);
+
+    it('counts total, low stock, and rentable as overlapping dimensions', async () => {
+        const f = await fixture();
+
+        // A plain sellable item, well stocked — counts only in total.
+        await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Soda', unit: 'bottles', commercialMode: 'SELL_ONLY',
+            allowNegativeStock: false, lowStockThreshold: 5,
+        } as any);
+        await inventory().createTransaction(f.workspace.id, f.user.id, {
+            itemId: (await testPrisma.inventoryItem.findFirstOrThrow({ where: { name: 'Soda' } })).id,
+            transactionType: 'PURCHASE', quantity: 50, unitCost: '1000',
+        } as any);
+
+        // A rentable item that is ALSO low stock — counts in all three.
+        const rentable: any = await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Projector', unit: 'pcs', commercialMode: 'SELL_AND_RENT',
+            allowNegativeStock: false, lowStockThreshold: 4,
+        } as any);
+        await inventory().createTransaction(f.workspace.id, f.user.id, {
+            itemId: rentable.id,
+            transactionType: 'PURCHASE', quantity: 2, unitCost: '200000',
+        } as any);
+
+        // A low-stock sellable item — counts in total and low stock.
+        const lowSell: any = await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Cables', unit: 'pcs', commercialMode: 'SELL_ONLY',
+            allowNegativeStock: false, lowStockThreshold: 10,
+        } as any);
+        await inventory().createTransaction(f.workspace.id, f.user.id, {
+            itemId: lowSell.id,
+            transactionType: 'PURCHASE', quantity: 3, unitCost: '5000',
+        } as any);
+
+        // An item with NO threshold — never low stock, whatever its stock.
+        const noThreshold: any = await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Pens', unit: 'pcs', commercialMode: 'SELL_ONLY',
+            allowNegativeStock: false,
+        } as any);
+        await inventory().createTransaction(f.workspace.id, f.user.id, {
+            itemId: noThreshold.id,
+            transactionType: 'PURCHASE', quantity: 0, unitCost: '500',
+        } as any).catch(() => null); // zero-qty purchase may be refused; stock starts at 0 anyway
+
+        const stats = await inventory().getStats(f.workspace.id);
+        expect(stats.totalItems).toBe(4);
+        expect(stats.rentable).toBe(1);
+        // Projector (2 ≤ 4) and Cables (3 ≤ 10); Pens has no threshold.
+        expect(stats.lowStock).toBe(2);
+
+        // The same definition as the low-stock report, item for item.
+        const report = await inventory().getLowStockAlerts(f.workspace.id);
+        expect(report.map((r: any) => r.name).sort()).toEqual(['Cables', 'Projector']);
+    });
+
+    it('ignores deactivated items', async () => {
+        const f = await fixture();
+        const item: any = await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Old Stock', unit: 'pcs', commercialMode: 'SELL_ONLY',
+            allowNegativeStock: false,
+        } as any);
+        await inventory().deactivateItem(item.id, f.workspace.id, f.user.id);
+
+        const stats = await inventory().getStats(f.workspace.id);
+        expect(stats.totalItems).toBe(0);
+        expect(stats.rentable).toBe(0);
+        expect(stats.lowStock).toBe(0);
+    });
+});

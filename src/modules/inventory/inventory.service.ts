@@ -199,6 +199,36 @@ export class InventoryService {
         };
     }
 
+    /**
+     * The inventory page's metric cards: total active items, how many are
+     * low on stock, and how many are rentable. Deliberately OVERLAPPING
+     * dimensions, not partitions — a low-stock rentable item counts in all
+     * three, because that is what each card asks. Computed server-side so
+     * the numbers stay true regardless of any list pagination, and using
+     * the same definitions as the reports (low stock = a configured
+     * threshold at or below stock; rentable = RENT_ONLY or SELL_AND_RENT).
+     */
+    async getStats(workspaceId: string) {
+        const [totalItems, rentable, lowStockItems] = await Promise.all([
+            this.prisma.inventoryItem.count({
+                where: { workspaceId, isActive: true },
+            }),
+            this.prisma.inventoryItem.count({
+                where: {
+                    workspaceId,
+                    isActive: true,
+                    commercialMode: { in: ['RENT_ONLY', 'SELL_AND_RENT'] },
+                },
+            }),
+            this.repository.getLowStockItems(workspaceId),
+        ]);
+        return {
+            totalItems,
+            rentable,
+            lowStock: lowStockItems.length,
+        };
+    }
+
     async getItem(itemId: string, workspaceId: string) {
         const item = await this.repository.findItemById(itemId);
         if (!item || item.workspaceId !== workspaceId) {

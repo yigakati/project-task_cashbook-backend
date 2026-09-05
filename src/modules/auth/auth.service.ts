@@ -23,7 +23,12 @@ import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
 import { verificationEmailTemplate, passwordResetEmailTemplate, welcomeEmailTemplate } from '../../utils/emailTemplates';
-import { provisionWorkspaceAccounting, seedDefaultWalletAccounts } from '../../core/ledger/coa.seed';
+import {
+    provisionWorkspaceAccounting,
+    seedDefaultWalletAccounts,
+    seedDefaultCashbook,
+} from '../../core/ledger/coa.seed';
+import { currencyForCountry } from '../../core/finance';
 
 const SUSPICIOUS_FAILURE_THRESHOLD = 5;
 const OTP_TTL_SECONDS = 15 * 60; // 15 minutes
@@ -59,17 +64,23 @@ export class AuthService {
             });
 
             // Auto-create personal workspace, born ready to book: chart of
-            // accounts, default wallet types, and the three obvious wallets —
-            // the same head start a business workspace gets.
+            // accounts, default wallet types, the country's obvious wallets,
+            // and its first cashbook — the same head start a business
+            // workspace gets. The country decides the currency (and with it,
+            // which wallets arrive: M-Pesa in Kenya, MTN MoMo in Uganda,
+            // PayPal for USD, ...).
+            const baseCurrency = currencyForCountry(dto.country);
             const personalWorkspace = await tx.workspace.create({
                 data: {
                     name: `${dto.firstName}'s Personal`,
                     type: WorkspaceType.PERSONAL,
                     ownerId: user.id,
+                    defaultCurrency: baseCurrency,
                 },
             });
-            await provisionWorkspaceAccounting(tx, personalWorkspace.id, personalWorkspace.defaultCurrency);
-            await seedDefaultWalletAccounts(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, user.id);
+            await provisionWorkspaceAccounting(tx, personalWorkspace.id, baseCurrency);
+            await seedDefaultWalletAccounts(tx, personalWorkspace.id, baseCurrency, user.id);
+            await seedDefaultCashbook(tx, personalWorkspace.id, baseCurrency, user.id);
 
             // Audit log
             await tx.auditLog.create({
@@ -361,6 +372,7 @@ export class AuthService {
         });
         await provisionWorkspaceAccounting(tx, personalWorkspace.id, personalWorkspace.defaultCurrency);
         await seedDefaultWalletAccounts(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, newUser.id);
+        await seedDefaultCashbook(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, newUser.id);
 
         await tx.auditLog.create({
             data: {

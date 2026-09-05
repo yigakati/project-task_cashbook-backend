@@ -89,27 +89,99 @@ export const DEFAULT_ACCOUNT_TYPES = [
     { name: 'Bank', classification: 'ASSET' },
     { name: 'Cash', classification: 'ASSET' },
     { name: 'Mobile Money', classification: 'ASSET' },
+    // Online money services (PayPal, Wise, ...) — not a bank, not a carrier
+    // float, not cash. USD workspaces are born with one (PayPal).
+    { name: 'Digital Wallet', classification: 'ASSET' },
     { name: 'Credit Card', classification: 'LIABILITY' },
     { name: 'Loan', classification: 'LIABILITY' },
 ] as const;
 
+export interface WalletSeed {
+    name: string;
+    accountTypeName: string;
+    icon: string;
+}
+
+const BANK_SEED: WalletSeed = { name: 'Bank', accountTypeName: 'Bank', icon: 'Landmark' };
+const CASH_SEED: WalletSeed = { name: 'Cash on Hand', accountTypeName: 'Cash', icon: 'Banknote' };
+
 /**
- * The obvious wallets every workspace is born with: the ways East-African
- * businesses actually hold money. Each maps onto its DEFAULT_ACCOUNT_TYPES
- * counterpart, so a user adding another bank account later lands on the same
- * "Bank" type and the taxonomy stays one thing.
+ * The wallets a workspace is born with, per currency: the ways money is
+ * actually held where that currency circulates. Each maps onto its
+ * DEFAULT_ACCOUNT_TYPES counterpart, so a user adding another bank account
+ * later lands on the same "Bank" type and the taxonomy stays one thing.
  *
- * Mobile money is split per carrier — Airtel Money and MTN MoMo — because that
- * is how people hold it: separate floats on separate phones. Both stay under
- * the one "Mobile Money" account type, so reports and type filters still see
- * them as one class of wallet.
+ * Mobile money is split per provider — separate floats on separate phones —
+ * and every provider stays under the one "Mobile Money" account type, so
+ * reports and type filters still see them as one class of wallet.
+ *
+ * The providers per country (the dominant licensed services):
+ *   UGX  Uganda      — MTN MoMo, Airtel Money
+ *   KES  Kenya       — M-Pesa (Safaricom), Airtel Money
+ *   TZS  Tanzania    — M-Pesa (Vodacom), Tigo Pesa, Airtel Money
+ *   RWF  Rwanda      — MTN MoMo, Airtel Money
+ *   BIF  Burundi     — Lumicash (Lumitel)
+ *   SSP  South Sudan — mGURUSH
+ *   ETB  Ethiopia    — Telebirr (Ethio Telecom)
+ *   USD  Global      — PayPal (an online wallet, not a carrier float — no
+ *                      mobile money)
+ * Currencies with no known provider ecosystem fall back to Bank + Cash on
+ * Hand, the universal pair.
  *
  * Icons come from the frontend's ACCOUNT_ICONS list — pick values that render
  * there, or the wallet shows the fallback glyph.
  */
-export const DEFAULT_WALLET_ACCOUNTS = [
-    { name: 'Airtel Money', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
-    { name: 'MTN MoMo', accountTypeName: 'Mobile Money', icon: 'Wallet' },
-    { name: 'Bank', accountTypeName: 'Bank', icon: 'Landmark' },
-    { name: 'Cash on Hand', accountTypeName: 'Cash', icon: 'Banknote' },
-] as const;
+export const WALLET_SEEDS_BY_CURRENCY: Record<string, readonly WalletSeed[]> = {
+    UGX: [
+        { name: 'Airtel Money', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+        { name: 'MTN MoMo', accountTypeName: 'Mobile Money', icon: 'Wallet' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    KES: [
+        { name: 'M-Pesa', accountTypeName: 'Mobile Money', icon: 'Coins' },
+        { name: 'Airtel Money', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    TZS: [
+        { name: 'M-Pesa', accountTypeName: 'Mobile Money', icon: 'Coins' },
+        { name: 'Tigo Pesa', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+        { name: 'Airtel Money', accountTypeName: 'Mobile Money', icon: 'Wallet' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    RWF: [
+        { name: 'MTN MoMo', accountTypeName: 'Mobile Money', icon: 'Wallet' },
+        { name: 'Airtel Money', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    BIF: [
+        { name: 'Lumicash', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    SSP: [
+        { name: 'mGURUSH', accountTypeName: 'Mobile Money', icon: 'HandCoins' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    ETB: [
+        { name: 'Telebirr', accountTypeName: 'Mobile Money', icon: 'Coins' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+    USD: [
+        { name: 'PayPal', accountTypeName: 'Digital Wallet', icon: 'CircleDollarSign' },
+        BANK_SEED,
+        CASH_SEED,
+    ],
+};
+
+/** The wallet seed list for a currency; unknown currencies get the universal
+ *  Bank + Cash on Hand pair. */
+export function walletSeedForCurrency(currency: string): readonly WalletSeed[] {
+    const normalized = (currency || '').trim().toUpperCase();
+    return WALLET_SEEDS_BY_CURRENCY[normalized] ?? [BANK_SEED, CASH_SEED];
+}

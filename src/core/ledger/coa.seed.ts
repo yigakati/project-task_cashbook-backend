@@ -11,10 +11,11 @@ import {
     BOOK_CASH_PARENT_CODE,
     CHART_OF_ACCOUNTS,
     DEFAULT_ACCOUNT_TYPES,
-    DEFAULT_WALLET_ACCOUNTS,
+    WalletSeed,
     WALLET_ASSET_PARENT_CODE,
     WALLET_LIABILITY_PARENT_CODE,
     normalBalanceFor,
+    walletSeedForCurrency,
 } from './coa.template';
 import type { SystemLedgerKey } from './ledger.types';
 
@@ -266,10 +267,14 @@ export async function provisionWorkspaceAccounting(
     return systemMap;
 }
 
+/** @deprecated Use seedDefaultWalletAccounts — kept for older callers; the
+ *  seed list is now chosen by currency inside the seeder itself. */
+export const DEFAULT_WALLET_ACCOUNTS = walletSeedForCurrency('UGX');
+
 /**
- * The obvious wallets — Mobile Money, Bank, Cash on Hand — a workspace is born
- * with, so a new user can record a wallet-linked entry without first learning
- * what an account type is.
+ * The wallets a workspace is born with — chosen by currency, so a Kenyan
+ * workspace opens with M-Pesa, a Ugandan one with MTN MoMo and Airtel Money,
+ * a USD one with PayPal. Bank and Cash on Hand are universal.
  *
  * Idempotent by name: an account the user (or a previous seed run) already
  * created under the same name is left exactly as it is, including its balance
@@ -283,9 +288,21 @@ export async function seedDefaultWalletAccounts(
     currency: string,
     userId: string,
 ): Promise<void> {
+    await seedWallets(tx, workspaceId, currency, userId, walletSeedForCurrency(currency));
+}
+
+/** The shared wallet-creation core: create any missing seed wallets, each
+ *  with its ledger account, skipping ones that already exist by name. */
+export async function seedWallets(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    currency: string,
+    userId: string,
+    seeds: readonly WalletSeed[],
+): Promise<void> {
     await ensureDefaultAccountTypes(tx, workspaceId);
 
-    for (const wallet of DEFAULT_WALLET_ACCOUNTS) {
+    for (const wallet of seeds) {
         const existing = await tx.account.findFirst({
             where: { workspaceId, name: wallet.name },
             select: { id: true },
@@ -333,4 +350,54 @@ export async function seedDefaultWalletAccounts(
             },
         });
     }
+}
+
+/**
+ * The one book a workspace is born with: "Cash Journal {current year}", so a
+ * new user's first entry has somewhere to live without learning what a
+ * cashbook is. Existing workspaces are untouched — this runs only from the
+ * workspace-creation paths.
+ *
+ * Idempotent: a workspace that already has any cashbook (user-created or a
+ * previous seed) keeps exactly what it has.
+ */
+export async function seedDefaultCashbook(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    currency: string,
+    userId: string,
+): Promise<void> {
+    const existing = await tx.cashbook.findFirst({
+        where: { workspaceId },
+        select: { id: true },
+    });
+    if (existing) return;
+
+    const year = new Date().getFullYear();
+    const cashbook = await tx.cashbook.create({
+        data: {
+            name: `Cash Journal ${year}`,
+            currency,
+            workspace: { connect: { id: workspaceId } },
+        },
+        select: { id: true, name: true, currency: true },
+    });
+
+    await ensureCashbookLedgerAccount(tx, {
+        id: cashbook.id,
+        workspaceId,
+        name: cashbook.name,
+        currency: cashbook.currency,
+    });
+
+    await tx.auditLog.create({
+        data: {
+            userId,
+            workspaceId,
+            action: AuditAction.CASHBOOK_CREATED,
+            resource: 'cashbook',
+            resourceId: cashbook.id,
+            details: { name: cashbook.name, currency, seeded: true } as any,
+        },
+    });
 }
