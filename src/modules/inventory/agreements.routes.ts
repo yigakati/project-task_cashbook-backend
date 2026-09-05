@@ -11,18 +11,22 @@ import { AuthenticatedRequest } from '../../core/types';
 import { StockTransfersService } from './stock-transfers.service';
 import { RentalAgreementsService } from './rental-agreements.service';
 import {
-    createStockTransferSchema, respondStockTransferSchema, stockTransferQuerySchema,
+    createStockRequestSchema, respondStockRequestSchema,
+    recordTransferEntrySchema, stockTransferQuerySchema,
     createRentalAgreementSchema, respondRentalAgreementSchema, rentalAgreementQuerySchema,
     recordAgreementExpenseSchema,
     reasonSchema,
 } from './agreements.dto';
 
 /**
- * Cross-workspace agreements — stock transfers and rental loans between two
- * platform users. Proposal routes are workspace-scoped (the goods must be
- * the sender's to promise); everything after is person-scoped, like peer
- * links, because the recipient's decision belongs to them personally, not to
- * whichever workspace they happen to be viewing.
+ * Cross-workspace agreements — stock requests and rental contracts between
+ * two platform users.
+ *
+ * Stock requests start in the requester's workspace (they ask a vendor for
+ * stock); everything after is person-scoped, like peer links, because each
+ * decision belongs to the person, not to whichever workspace they are
+ * viewing. Rental contracts start from a rentable item in the lender's
+ * workspace; the rest mirrors the same person-scoped shape.
  */
 
 @injectable()
@@ -32,58 +36,78 @@ class AgreementsController {
         private rentalAgreements: RentalAgreementsService,
     ) { }
 
-    // ─── Stock transfers ────────────────────────────────
-    async proposeTransfer(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    // ─── Stock requests ─────────────────────────────────
+    async createStockRequest(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const data = await this.stockTransfers.create(
+            const data = await this.stockTransfers.createRequest(
                 req.params.workspaceId as string,
-                req.params.itemId as string,
                 req.user.userId,
                 req.body,
             );
-            res.status(StatusCodes.CREATED).json({ success: true, message: 'Stock transfer proposed', data });
+            res.status(StatusCodes.CREATED).json({ success: true, message: 'Stock request sent', data });
         } catch (e) { next(e); }
     }
 
-    async listTransfers(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async listStockRequests(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const result = await this.stockTransfers.list(req.user.userId, req.query as any);
-            res.status(StatusCodes.OK).json({ success: true, message: 'Transfers retrieved', ...result });
+            res.status(StatusCodes.OK).json({ success: true, message: 'Stock requests retrieved', ...result });
         } catch (e) { next(e); }
     }
 
-    async getTransfer(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async getStockRequest(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.stockTransfers.getForUser(req.params.transferId as string, req.user.userId);
-            res.status(StatusCodes.OK).json({ success: true, message: 'Transfer retrieved', data });
+            res.status(StatusCodes.OK).json({ success: true, message: 'Stock request retrieved', data });
         } catch (e) { next(e); }
     }
 
-    async transferAcceptanceOptions(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async getSendOptions(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const data = await this.stockTransfers.getAcceptanceOptions(req.params.transferId as string, req.user.userId);
-            res.status(StatusCodes.OK).json({ success: true, message: 'Acceptance options retrieved', data });
+            const data = await this.stockTransfers.getSendOptions(req.params.transferId as string, req.user.userId);
+            res.status(StatusCodes.OK).json({ success: true, message: 'Send options retrieved', data });
         } catch (e) { next(e); }
     }
 
-    async acceptTransfer(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async sendStock(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const data = await this.stockTransfers.accept(req.params.transferId as string, req.user.userId, req.body);
-            res.status(StatusCodes.OK).json({ success: true, message: 'Stock transferred', data });
+            const data = await this.stockTransfers.send(req.params.transferId as string, req.user.userId, req.body);
+            res.status(StatusCodes.OK).json({ success: true, message: 'Stock sent — awaiting the customer\'s confirmation', data });
         } catch (e) { next(e); }
     }
 
-    async declineTransfer(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async receiveStock(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.stockTransfers.receive(req.params.transferId as string, req.user.userId);
+            res.status(StatusCodes.OK).json({ success: true, message: 'Stock received — exchange complete', data });
+        } catch (e) { next(e); }
+    }
+
+    async declineStockRequest(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.stockTransfers.decline(req.params.transferId as string, req.user.userId, req.body?.reason);
-            res.status(StatusCodes.OK).json({ success: true, message: 'Transfer declined', data });
+            res.status(StatusCodes.OK).json({ success: true, message: 'Stock request declined', data });
         } catch (e) { next(e); }
     }
 
-    async cancelTransfer(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async cancelStockRequest(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.stockTransfers.cancel(req.params.transferId as string, req.user.userId, req.body?.reason);
-            res.status(StatusCodes.OK).json({ success: true, message: 'Transfer cancelled', data });
+            res.status(StatusCodes.OK).json({ success: true, message: 'Stock request cancelled', data });
+        } catch (e) { next(e); }
+    }
+
+    async recordStockExpense(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.stockTransfers.recordExpense(req.params.transferId as string, req.user.userId, req.body);
+            res.status(StatusCodes.CREATED).json({ success: true, message: 'Stock expense recorded', data });
+        } catch (e) { next(e); }
+    }
+
+    async recordStockIncome(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.stockTransfers.recordIncome(req.params.transferId as string, req.user.userId, req.body);
+            res.status(StatusCodes.CREATED).json({ success: true, message: 'Stock income recorded', data });
         } catch (e) { next(e); }
     }
 
@@ -128,28 +152,6 @@ class AgreementsController {
         } catch (e) { next(e); }
     }
 
-    async recordAgreementIncome(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const data = await this.rentalAgreements.recordLenderIncome(
-                req.params.agreementId as string,
-                req.user.userId,
-                req.body,
-            );
-            res.status(StatusCodes.CREATED).json({ success: true, message: 'Rental income recorded', data });
-        } catch (e) { next(e); }
-    }
-
-    async recordAgreementExpense(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const data = await this.rentalAgreements.recordBorrowerExpense(
-                req.params.agreementId as string,
-                req.user.userId,
-                req.body,
-            );
-            res.status(StatusCodes.CREATED).json({ success: true, message: 'Rental expense recorded', data });
-        } catch (e) { next(e); }
-    }
-
     async declineAgreement(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.rentalAgreements.decline(req.params.agreementId as string, req.user.userId, req.body?.reason);
@@ -163,26 +165,34 @@ class AgreementsController {
             res.status(StatusCodes.OK).json({ success: true, message: 'Agreement cancelled', data });
         } catch (e) { next(e); }
     }
+
+    async recordAgreementIncome(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.rentalAgreements.recordLenderIncome(req.params.agreementId as string, req.user.userId, req.body);
+            res.status(StatusCodes.CREATED).json({ success: true, message: 'Rental income recorded', data });
+        } catch (e) { next(e); }
+    }
+
+    async recordAgreementExpense(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.rentalAgreements.recordBorrowerExpense(req.params.agreementId as string, req.user.userId, req.body);
+            res.status(StatusCodes.CREATED).json({ success: true, message: 'Rental expense recorded', data });
+        } catch (e) { next(e); }
+    }
 }
 
-/*
- * Mounted TWICE in routes/index.ts: at /agreements (person-scoped inbox)
- * and /workspaces/:workspaceId/agreements (proposals — the guard needs the
- * workspace param). mergeParams lets the workspace-scoped mount feed
- * requireWorkspaceMember; the bare mount simply never has it.
- */
 export const agreementsRouter = Router({ mergeParams: true });
 const controller = container.resolve(AgreementsController);
 
 agreementsRouter.use(authenticate as any);
 
-// ─── Proposal (workspace-scoped: the goods must be the sender's) ──
+// ─── Proposal (workspace-scoped: the request/offer originates here) ──
 
-agreementsRouter.post('/stock-transfers/:itemId',
+agreementsRouter.post('/stock-requests',
     requireWorkspaceMember(WorkspacePermission.MANAGE_INVENTORY) as any,
-    idempotency('POST /agreements/stock-transfers/:itemId') as any,
-    validate(createStockTransferSchema),
-    controller.proposeTransfer.bind(controller) as any,
+    idempotency('POST /agreements/stock-requests') as any,
+    validate(createStockRequestSchema),
+    controller.createStockRequest.bind(controller) as any,
 );
 
 agreementsRouter.post('/rental-agreements/:itemId',
@@ -192,36 +202,55 @@ agreementsRouter.post('/rental-agreements/:itemId',
     controller.proposeAgreement.bind(controller) as any,
 );
 
-// ─── Person-scoped agreement surface ───────────────────
+// ─── Person-scoped stock request surface ───────────────
 
-agreementsRouter.get('/stock-transfers',
+agreementsRouter.get('/stock-requests',
     validate(stockTransferQuerySchema, 'query'),
-    controller.listTransfers.bind(controller) as any,
+    controller.listStockRequests.bind(controller) as any,
 );
 
-agreementsRouter.get('/stock-transfers/:transferId',
-    controller.getTransfer.bind(controller) as any,
+agreementsRouter.get('/stock-requests/:transferId',
+    controller.getStockRequest.bind(controller) as any,
 );
 
-agreementsRouter.get('/stock-transfers/:transferId/acceptance-options',
-    controller.transferAcceptanceOptions.bind(controller) as any,
+agreementsRouter.get('/stock-requests/:transferId/send-options',
+    controller.getSendOptions.bind(controller) as any,
 );
 
-agreementsRouter.post('/stock-transfers/:transferId/accept',
-    idempotency('POST /agreements/stock-transfers/:transferId/accept') as any,
-    validate(respondStockTransferSchema),
-    controller.acceptTransfer.bind(controller) as any,
+agreementsRouter.post('/stock-requests/:transferId/send',
+    idempotency('POST /agreements/stock-requests/:transferId/send') as any,
+    validate(respondStockRequestSchema),
+    controller.sendStock.bind(controller) as any,
 );
 
-agreementsRouter.post('/stock-transfers/:transferId/decline',
+agreementsRouter.post('/stock-requests/:transferId/receive',
+    idempotency('POST /agreements/stock-requests/:transferId/receive') as any,
+    controller.receiveStock.bind(controller) as any,
+);
+
+agreementsRouter.post('/stock-requests/:transferId/decline',
     validate(reasonSchema),
-    controller.declineTransfer.bind(controller) as any,
+    controller.declineStockRequest.bind(controller) as any,
 );
 
-agreementsRouter.post('/stock-transfers/:transferId/cancel',
+agreementsRouter.post('/stock-requests/:transferId/cancel',
     validate(reasonSchema),
-    controller.cancelTransfer.bind(controller) as any,
+    controller.cancelStockRequest.bind(controller) as any,
 );
+
+agreementsRouter.post('/stock-requests/:transferId/record-expense',
+    idempotency('POST /agreements/stock-requests/:transferId/record-expense') as any,
+    validate(recordTransferEntrySchema),
+    controller.recordStockExpense.bind(controller) as any,
+);
+
+agreementsRouter.post('/stock-requests/:transferId/record-income',
+    idempotency('POST /agreements/stock-requests/:transferId/record-income') as any,
+    validate(recordTransferEntrySchema),
+    controller.recordStockIncome.bind(controller) as any,
+);
+
+// ─── Person-scoped rental agreement surface ────────────
 
 agreementsRouter.get('/rental-agreements',
     validate(rentalAgreementQuerySchema, 'query'),
@@ -242,21 +271,6 @@ agreementsRouter.post('/rental-agreements/:agreementId/accept',
     controller.acceptAgreement.bind(controller) as any,
 );
 
-// The lender records the rental income in their own workspace.
-agreementsRouter.post('/rental-agreements/:agreementId/record-income',
-    idempotency('POST /agreements/rental-agreements/:agreementId/record-income') as any,
-    validate(recordAgreementExpenseSchema),
-    controller.recordAgreementIncome.bind(controller) as any,
-);
-
-// The borrower records the rental cost as an expense in their accepted
-// workspace. Person-scoped like the rest of the agreement surface.
-agreementsRouter.post('/rental-agreements/:agreementId/record-expense',
-    idempotency('POST /agreements/rental-agreements/:agreementId/record-expense') as any,
-    validate(recordAgreementExpenseSchema),
-    controller.recordAgreementExpense.bind(controller) as any,
-);
-
 agreementsRouter.post('/rental-agreements/:agreementId/decline',
     validate(reasonSchema),
     controller.declineAgreement.bind(controller) as any,
@@ -265,6 +279,18 @@ agreementsRouter.post('/rental-agreements/:agreementId/decline',
 agreementsRouter.post('/rental-agreements/:agreementId/cancel',
     validate(reasonSchema),
     controller.cancelAgreement.bind(controller) as any,
+);
+
+agreementsRouter.post('/rental-agreements/:agreementId/record-income',
+    idempotency('POST /agreements/rental-agreements/:agreementId/record-income') as any,
+    validate(recordAgreementExpenseSchema),
+    controller.recordAgreementIncome.bind(controller) as any,
+);
+
+agreementsRouter.post('/rental-agreements/:agreementId/record-expense',
+    idempotency('POST /agreements/rental-agreements/:agreementId/record-expense') as any,
+    validate(recordAgreementExpenseSchema),
+    controller.recordAgreementExpense.bind(controller) as any,
 );
 
 container.registerSingleton(StockTransfersService);

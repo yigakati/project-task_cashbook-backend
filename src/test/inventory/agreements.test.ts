@@ -8,6 +8,7 @@
  * borrower decides.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import { WorkspaceType } from '@prisma/client';
 import { resetDatabase, testPrisma } from '../setup';
 import { resolveService } from '../container';
 import { InventoryService } from '../../modules/inventory/inventory.service';
@@ -25,13 +26,23 @@ const agreements = () => resolveService(RentalAgreementsService);
 
 async function userWithWorkspace(email: string) {
     const user = await createUser({ email });
+    // Mirrors production signup: a personal workspace alongside any others.
+    const personal = await testPrisma.workspace.create({
+        data: {
+            name: `Personal ${user.id.slice(0, 6)}`,
+            type: WorkspaceType.PERSONAL,
+            ownerId: user.id,
+            defaultCurrency: 'UGX',
+            timezone: 'Africa/Kampala',
+        },
+    });
     const workspace = await createWorkspace(user.id);
-    return { user, workspace };
+    return { user, workspace, personal };
 }
 
 /** A user, workspace, stocked item (purchased at the given cost), and wallet. */
 async function stockedOwner(email: string, itemName: string, quantity: number, unitCost: string) {
-    const { user, workspace } = await userWithWorkspace(email);
+    const { user, workspace, personal } = await userWithWorkspace(email);
     await testPrisma.$transaction(async (tx: any) => {
         await provisionWorkspaceAccounting(tx, workspace.id, 'UGX');
     });
@@ -53,7 +64,7 @@ async function stockedOwner(email: string, itemName: string, quantity: number, u
         await ensureWalletLedgerAccount(tx, full, full.accountType.classification);
     });
 
-    return { user, workspace, item: item as any, wallet };
+    return { user, workspace, personal, item: item as any, wallet };
 }
 
 /** A customer contact linked to the given user, in the lender's workspace. */
@@ -77,137 +88,226 @@ async function getStock(itemId: string) {
     return testPrisma.inventoryStock.findUniqueOrThrow({ where: { itemId } });
 }
 
-describe('stock transfers', () => {
+describe('stock requests', () => {
     beforeEach(resetDatabase);
 
-    it('moves the stock between workspaces at the same per-unit value, atomically', async () => {
-        const sender = await stockedOwner(`sender-${Date.now()}@test.local`, 'Camera', 10, '40000');
-        const receiver = await userWithWorkspace(`receiver-${Date.now()}@test.local`);
-        // Seed the receiver with a same-named item to pick at acceptance.
-        const receiverItem: any = await inventory().createItem(receiver.workspace.id, receiver.user.id, {
-            name: 'Camera', unit: 'pcs', commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+    it('walks the full lifecycle: request (item-tied) → send (vendor out) → receive (requester in)', async () => {
+        const vendor = await stockedOwner(`vendor-${Date.now()}@test.local`, 'Camera', 10, '40000');
+        const requester = await userWithWorkspace(`req-${Date.now()}@test.local`);
+        // The requester's own item — the request is made FROM it.
+        const wanted: any = await inventory().createItem(requester.workspace.id, requester.user.id, {
+            name: 'Camera', unit: 'pcs', commercialMode: 'SELL_AND_RENT', allowNegativeStock: false,
         } as any);
 
-        const proposal: any = await transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 4, recipientEmail: receiver.user.email },
+        // 1. REQUEST — tied to the requester's item and workspace. Nothing moves.
+        const request: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 4, vendorEmail: vendor.user.email },
         );
-        expect(proposal.status).toBe('PENDING');
-        // Nothing has moved yet.
-        expect((await getStock(sender.item.id)).quantityOnHand).toBe(10);
+        expect(request.status).toBe('PENDING');
+        expect(request.recipientItemId).toBe(wanted.id);
+        expect(request.recipientWorkspaceId).toBe(requester.workspace.id);
+        expect((await getStock(vendor.item.id)).quantityOnHand).toBe(10);
 
-        const accepted: any = await transfers().accept(
-            proposal.id, receiver.user.id,
-            { recipientWorkspaceId: receiver.workspace.id, recipientItemId: receiverItem.id },
-        );
-        expect(accepted.status).toBe('ACCEPTED');
+        // 2. SEND — the vendor names their workspace + item; stock leaves.
+        const sendOptions = await transfers().getSendOptions(request.id, vendor.user.id);
+        expect(sendOptions.workspaces.map((w: any) => w.id)).toContain(vendor.workspace.id);
+        // Only currency-matching items are offered.
+        expect(sendOptions.items.map((i: any) => i.id)).toContain(vendor.item.id);
 
-        // Sender: 4 out; receiver: 4 in — at the sender's average cost.
-        const senderStock = await getStock(sender.item.id);
-        const receiverStock = await getStock(receiverItem.id);
-        expect(senderStock.quantityOnHand).toBe(6);
-        expect(receiverStock.quantityOnHand).toBe(4);
-        expect(receiverStock.averageCost.toString()).toBe(senderStock.averageCost.toString());
+        const sent: any = await transfers().send(request.id, vendor.user.id, {
+            senderWorkspaceId: vendor.workspace.id,
+            senderItemId: vendor.item.id,
+        });
+        expect(sent.status).toBe('SENT');
+        expect((await getStock(vendor.item.id)).quantityOnHand).toBe(6);
 
-        // Both sides carry the movement with matching provenance.
+        // 3. RECEIVE — no choices; the stock lands in the requesting item.
+        const completed: any = await transfers().receive(request.id, requester.user.id);
+        expect(completed.status).toBe('COMPLETED');
+        const receivedStock = await getStock(wanted.id);
+        expect(receivedStock.quantityOnHand).toBe(4);
+        expect(receivedStock.averageCost.toString()).toBe((await getStock(vendor.item.id)).averageCost.toString());
+
+        // Both movements carry the same provenance.
         const [outTx, inTx] = await Promise.all([
             testPrisma.inventoryTransaction.findFirst({
-                where: { itemId: sender.item.id, transactionType: 'TRANSFER_OUT' },
+                where: { itemId: vendor.item.id, transactionType: 'TRANSFER_OUT' },
             }),
             testPrisma.inventoryTransaction.findFirst({
-                where: { itemId: receiverItem.id, transactionType: 'TRANSFER_IN' },
+                where: { itemId: wanted.id, transactionType: 'TRANSFER_IN' },
             }),
         ]);
         expect(outTx?.unitCost.toString()).toBe(inTx?.unitCost.toString());
-        expect(outTx?.referenceType).toBe('STOCK_TRANSFER');
         expect(outTx?.referenceId).toBe(inTx?.referenceId);
+        expect(outTx?.referenceType).toBe('STOCK_TRANSFER');
     });
 
-    it('creates the receiving item when none is picked', async () => {
-        const sender = await stockedOwner(`s-${Date.now()}@test.local`, 'Drone', 5, '60000');
-        const receiver = await userWithWorkspace(`r-${Date.now()}@test.local`);
+    it('scopes requests to their workspace: origin workspace only, vendor personal only, sending workspace after send', async () => {
+        const vendor = await stockedOwner(`v2-${Date.now()}@test.local`, 'Lens', 8, '15000');
+        const requester = await userWithWorkspace(`r2-${Date.now()}@test.local`);
+        // Another workspace of the requester's — must NOT see the request.
+        const requesterOther = await createWorkspace(requester.user.id);
 
-        const proposal: any = await transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 2, recipientEmail: receiver.user.email },
+        const wanted: any = await inventory().createItem(requester.workspace.id, requester.user.id, {
+            name: 'Lens', unit: 'pcs', commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+        } as any);
+        const request: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 2, vendorEmail: vendor.user.email },
         );
 
-        const accepted: any = await transfers().accept(
-            proposal.id, receiver.user.id,
-            { recipientWorkspaceId: receiver.workspace.id },
-        );
-        expect(accepted.recipientItemId).not.toBeNull();
+        // Requester's origin workspace sees it; their other workspace does not.
+        const inOrigin = await transfers().list(requester.user.id, { workspaceId: requester.workspace.id, page: 1, limit: 50 } as any);
+        expect(inOrigin.data.map((t: any) => t.id)).toContain(request.id);
+        const inOther = await transfers().list(requester.user.id, { workspaceId: requesterOther.id, page: 1, limit: 50 } as any);
+        expect(inOther.data.map((t: any) => t.id)).not.toContain(request.id);
 
-        const created = await testPrisma.inventoryItem.findUniqueOrThrow({
-            where: { id: accepted.recipientItemId! },
+        // Vendor sees the pending request only in their personal workspace.
+        const vendorPersonalView = await transfers().list(vendor.user.id, { workspaceId: vendor.personal.id, page: 1, limit: 50 } as any);
+        expect(vendorPersonalView.data.map((t: any) => t.id)).toContain(request.id);
+        const vendorBusinessView = await transfers().list(vendor.user.id, { workspaceId: vendor.workspace.id, page: 1, limit: 50 } as any);
+        expect(vendorBusinessView.data.map((t: any) => t.id)).not.toContain(request.id);
+
+        // After the send, the request belongs to the vendor's sending
+        // workspace — not even their personal workspace shows it.
+        await transfers().send(request.id, vendor.user.id, {
+            senderWorkspaceId: vendor.workspace.id,
+            senderItemId: vendor.item.id,
         });
-        expect(created.name).toBe('Drone');
-        expect(created.unit).toBe('pcs');
-        expect((await getStock(created.id)).quantityOnHand).toBe(2);
+        const vendorPersonalAfter = await transfers().list(vendor.user.id, { workspaceId: vendor.personal.id, page: 1, limit: 50 } as any);
+        expect(vendorPersonalAfter.data.map((t: any) => t.id)).not.toContain(request.id);
+        const vendorBusinessAfter = await transfers().list(vendor.user.id, { workspaceId: vendor.workspace.id, page: 1, limit: 50 } as any);
+        expect(vendorBusinessAfter.data.map((t: any) => t.id)).toContain(request.id);
+        // ...and the requester still sees it in the origin workspace.
+        const requesterAfter = await transfers().list(requester.user.id, { workspaceId: requester.workspace.id, page: 1, limit: 50 } as any);
+        expect(requesterAfter.data.map((t: any) => t.id)).toContain(request.id);
     });
 
-    it('refuses self-transfers, unknown emails, and insufficient stock', async () => {
-        const sender = await stockedOwner(`s2-${Date.now()}@test.local`, 'Tripod', 3, '5000');
+    it('the requester can cancel while pending; the vendor can decline; both leave stock untouched', async () => {
+        const vendor = await stockedOwner(`v3-${Date.now()}@test.local`, 'Tripod', 8, '5000');
+        const requester = await userWithWorkspace(`r3-${Date.now()}@test.local`);
+        const wanted: any = await inventory().createItem(requester.workspace.id, requester.user.id, {
+            name: 'Tripod', unit: 'pcs', commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+        } as any);
 
-        await expect(transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 1, recipientEmail: sender.user.email },
-        )).rejects.toMatchObject({ code: 'SELF_TRANSFER' });
+        const r1: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 2, vendorEmail: vendor.user.email },
+        );
+        await transfers().cancel(r1.id, requester.user.id);
+        expect((await getStock(vendor.item.id)).quantityOnHand).toBe(8);
 
-        await expect(transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 1, recipientEmail: 'ghost@test.local' },
+        const r2: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 3, vendorEmail: vendor.user.email },
+        );
+        await transfers().decline(r2.id, vendor.user.id, 'Out of stock');
+        expect((await getStock(vendor.item.id)).quantityOnHand).toBe(8);
+    });
+
+    it('sent stock cannot be cancelled — only received; insufficient stock refuses the send', async () => {
+        const vendor = await stockedOwner(`v4-${Date.now()}@test.local`, 'Light', 5, '5000');
+        const requester = await userWithWorkspace(`r4-${Date.now()}@test.local`);
+        const wanted: any = await inventory().createItem(requester.workspace.id, requester.user.id, {
+            name: 'Light', unit: 'pcs', commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+        } as any);
+
+        const request: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 2, vendorEmail: vendor.user.email },
+        );
+
+        // Asking for more than the vendor has fails at send, not at request.
+        const tooBig: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 99, vendorEmail: vendor.user.email },
+        );
+        await expect(transfers().send(tooBig.id, vendor.user.id, {
+            senderWorkspaceId: vendor.workspace.id,
+            senderItemId: vendor.item.id,
+        })).rejects.toMatchObject({ code: 'INSUFFICIENT_STOCK' });
+
+        await transfers().send(request.id, vendor.user.id, {
+            senderWorkspaceId: vendor.workspace.id,
+            senderItemId: vendor.item.id,
+        });
+        // Once sent, the requester cannot cancel — coordinate a return instead.
+        await expect(transfers().cancel(request.id, requester.user.id)).rejects.toMatchObject({ code: 'INVALID_STATUS' });
+    });
+
+    it('self-requests, unknown emails, accountless contacts, and foreign items are refused', async () => {
+        const requester = await userWithWorkspace(`r5-${Date.now()}@test.local`);
+        const foreign = await stockedOwner(`f5-${Date.now()}@test.local`, 'Boom', 5, '1000');
+        const wanted: any = await inventory().createItem(requester.workspace.id, requester.user.id, {
+            name: 'Boom', unit: 'pcs', commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+        } as any);
+
+        await expect(transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 1, vendorEmail: requester.user.email },
+        )).rejects.toMatchObject({ code: 'SELF_REQUEST' });
+
+        await expect(transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 1, vendorEmail: 'ghost@test.local' },
         )).rejects.toMatchObject({ code: 'USER_NOT_FOUND' });
 
-        const realRecipient = await createUser({ email: `real-${Date.now()}@test.local` });
-        await expect(transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 99, recipientEmail: realRecipient.email },
-        )).rejects.toMatchObject({ code: 'INSUFFICIENT_STOCK' });
-    });
+        // An item in someone else's workspace cannot be the request target.
+        await expect(transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: foreign.item.id, quantity: 1, vendorEmail: 'someone@test.local' },
+        )).rejects.toMatchObject({ code: 'NOT_FOUND' });
 
-    it('only the recipient accepts; decline leaves stock untouched', async () => {
-        const sender = await stockedOwner(`s3-${Date.now()}@test.local`, 'Lens', 8, '15000');
-        const receiver = await userWithWorkspace(`r3-${Date.now()}@test.local`);
-
-        const proposal: any = await transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 3, recipientEmail: receiver.user.email },
-        );
-
-        await expect(transfers().accept(
-            proposal.id, sender.user.id,
-            { recipientWorkspaceId: sender.workspace.id },
-        )).rejects.toMatchObject({ statusCode: 403 });
-
-        await transfers().decline(proposal.id, receiver.user.id, 'Not needed');
-        expect((await getStock(sender.item.id)).quantityOnHand).toBe(8);
-
-        await expect(transfers().accept(
-            proposal.id, receiver.user.id,
-            { recipientWorkspaceId: receiver.workspace.id },
-        )).rejects.toMatchObject({ code: 'INVALID_STATUS' });
-    });
-
-    it('refuses accepting into a workspace of the wrong currency', async () => {
-        const sender = await stockedOwner(`s4-${Date.now()}@test.local`, 'Mic', 5, '9000');
-        const receiver = await userWithWorkspace(`r4-${Date.now()}@test.local`);
-        // A USD workspace cannot receive UGX stock — no FX, ever.
-        const usdWorkspace = await createWorkspace(receiver.user.id, { } as any);
-        await testPrisma.workspace.update({
-            where: { id: usdWorkspace.id },
-            data: { defaultCurrency: 'KES' },
+        const walkIn = await testPrisma.contact.create({
+            data: { workspaceId: requester.workspace.id, type: 'VENDOR', name: 'Walk In Vendor' },
         });
+        await expect(transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 1, contactId: walkIn.id },
+        )).rejects.toMatchObject({ code: 'CONTACT_HAS_NO_ACCOUNT' });
+    });
 
-        const proposal: any = await transfers().create(
-            sender.workspace.id, sender.item.id, sender.user.id,
-            { quantity: 1, recipientEmail: receiver.user.email },
+    it('records the requester expense and vendor income once each, in the right workspaces', async () => {
+        const vendor = await stockedOwner(`v6-${Date.now()}@test.local`, 'Mic', 5, '9000');
+        const requester = await userWithWorkspace(`r6-${Date.now()}@test.local`);
+        const requesterBook = await createCashbook(requester.workspace.id, requester.user.id);
+        const vendorBook = await createCashbook(vendor.workspace.id, vendor.user.id);
+        const wanted: any = await inventory().createItem(requester.workspace.id, requester.user.id, {
+            name: 'Mic', unit: 'pcs', commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+        } as any);
+
+        const request: any = await transfers().createRequest(
+            requester.workspace.id, requester.user.id,
+            { itemId: wanted.id, quantity: 2, vendorEmail: vendor.user.email },
         );
+        await transfers().send(request.id, vendor.user.id, {
+            senderWorkspaceId: vendor.workspace.id,
+            senderItemId: vendor.item.id,
+        });
+        await transfers().receive(request.id, requester.user.id);
 
-        await expect(transfers().accept(
-            proposal.id, receiver.user.id,
-            { recipientWorkspaceId: usdWorkspace.id },
-        )).rejects.toMatchObject({ code: 'CURRENCY_MISMATCH' });
+        // The vendor can record income as soon as the goods left (SENT+).
+        const income: any = await transfers().recordIncome(request.id, vendor.user.id, {
+            cashbookId: vendorBook.id,
+        });
+        expect(income.type).toBe('INCOME');
+        expect(income.amount.toString()).toBe('18000');
+
+        // The requester records the expense after receipt, in the origin workspace.
+        const expense: any = await transfers().recordExpense(request.id, requester.user.id, {
+            cashbookId: requesterBook.id,
+        });
+        expect(expense.type).toBe('EXPENSE');
+        expect(expense.amount.toString()).toBe('18000');
+
+        // Both are one-time.
+        await expect(transfers().recordExpense(request.id, requester.user.id, {
+            cashbookId: requesterBook.id,
+        })).rejects.toMatchObject({ code: 'ALREADY_RECORDED' });
+        await expect(transfers().recordIncome(request.id, vendor.user.id, {
+            cashbookId: vendorBook.id,
+        })).rejects.toMatchObject({ code: 'ALREADY_RECORDED' });
     });
 });
 

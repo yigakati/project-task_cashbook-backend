@@ -422,6 +422,8 @@ model Entry {
   settlementMatched   PeerLinkSettlement[] @relation("PeerLinkSettlementMatch")
   agreementExpense    RentalAgreement?     @relation("RentalAgreementExpense")
   agreementIncome     RentalAgreement?     @relation("RentalAgreementIncome")
+  transferExpense     StockTransfer?       @relation("StockTransferExpense")
+  transferIncome      StockTransfer?       @relation("StockTransferIncome")
 
   @@unique([cashbookId, integrationApiKeyId, externalRef])
   @@index([cashbookId])
@@ -1431,8 +1433,13 @@ model LotConsumption {
 // receiver's — so both books agree on what moved and what it was worth.
 
 enum StockTransferStatus {
+  /// The requester asked a vendor for stock; awaiting the vendor's decision.
   PENDING
-  ACCEPTED
+  /// The vendor accepted and released the stock — it has left their
+  /// workspace; the requester can now confirm receipt.
+  SENT
+  /// The requester confirmed receipt into their chosen workspace. Done.
+  COMPLETED
   DECLINED
   CANCELLED
 }
@@ -1442,30 +1449,41 @@ model StockTransfer {
   status StockTransferStatus @default(PENDING)
 
   senderUserId      String  @map("sender_user_id") @db.Uuid
-  senderWorkspaceId String  @map("sender_workspace_id") @db.Uuid
-  senderItemId      String  @map("sender_item_id") @db.Uuid
+  /// Null until the vendor sends — a request names a wanted item in notes,
+  /// the vendor's real workspace/item only exist once they release stock.
+  senderWorkspaceId String? @map("sender_workspace_id") @db.Uuid
+  senderItemId      String? @map("sender_item_id") @db.Uuid
   quantity          Int
-  /// The sender's per-unit cost at proposal — informational. The value that
-  /// actually moves is computed at acceptance from the sender's current
-  /// weighted average, so the two sides can never disagree.
+  /// The vendor's per-unit cost snapshot — informational. The value that
+  /// actually moves is computed from the vendor's current weighted average
+  /// when the stock leaves, so the two sides can never disagree.
   proposedUnitCost  Decimal @map("proposed_unit_cost") @db.Decimal(20, 4)
 
   recipientUserId      String? @map("recipient_user_id") @db.Uuid
-  /// Chosen by the recipient at acceptance.
+  /// Chosen by the requester when confirming receipt.
   recipientWorkspaceId String? @map("recipient_workspace_id") @db.Uuid
-  /// The recipient's item that received the stock — picked from their
-  /// inventory or auto-created from the sender's details.
+  /// The requester's item that receives the stock — picked from their
+  /// inventory or auto-created from the vendor's details.
   recipientItemId      String? @map("recipient_item_id") @db.Uuid
+
+  /// The requester's expense entry, once recorded (one-time).
+  expenseEntryId String? @unique @map("expense_entry_id") @db.Uuid
+  /// The vendor's income entry, once recorded (one-time).
+  incomeEntryId  String? @unique @map("income_entry_id") @db.Uuid
 
   notes       String?
   respondedAt DateTime? @map("responded_at")
+  sentAt      DateTime? @map("sent_at")
+  receivedAt  DateTime? @map("received_at")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
   senderUser         User           @relation("StockTransferSender", fields: [senderUserId], references: [id])
   recipientUser      User?          @relation("StockTransferRecipient", fields: [recipientUserId], references: [id])
-  senderWorkspace    Workspace      @relation("StockTransferSenderWorkspace", fields: [senderWorkspaceId], references: [id], onDelete: Cascade)
-  senderItem         InventoryItem  @relation("StockTransferItem", fields: [senderItemId], references: [id], onDelete: Cascade)
+  expenseEntry       Entry?         @relation("StockTransferExpense", fields: [expenseEntryId], references: [id], onDelete: SetNull)
+  incomeEntry        Entry?         @relation("StockTransferIncome", fields: [incomeEntryId], references: [id], onDelete: SetNull)
+  senderWorkspace    Workspace?     @relation("StockTransferSenderWorkspace", fields: [senderWorkspaceId], references: [id], onDelete: Cascade)
+  senderItem         InventoryItem? @relation("StockTransferItem", fields: [senderItemId], references: [id], onDelete: Cascade)
   recipientWorkspace Workspace?     @relation("StockTransferRecipientWorkspace", fields: [recipientWorkspaceId], references: [id], onDelete: SetNull)
   recipientItem      InventoryItem? @relation("StockTransferRecipientItem", fields: [recipientItemId], references: [id], onDelete: SetNull)
 

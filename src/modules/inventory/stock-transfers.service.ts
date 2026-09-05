@@ -1,7 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import {
     Prisma, PrismaClient, StockTransferStatus, InventoryTransactionType,
-    InventoryReferenceType, NotificationType, NotificationEntityType,
+    InventoryReferenceType, NotificationType, NotificationEntityType, WorkspaceType,
 } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { NotFoundError, AppError, AuthorizationError } from '../../core/errors/AppError';
@@ -10,28 +10,45 @@ import { withFinancialTransaction } from '../../core/db/transaction';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InventoryService } from './inventory.service';
 import {
-    CreateStockTransferDto, RespondStockTransferDto, StockTransferQueryDto,
+    CreateStockRequestDto, RespondStockRequestDto,
+    StockTransferQueryDto, RecordTransferEntryDto,
 } from './agreements.dto';
 
 const TRANSFER_INCLUDE = {
     senderUser: { select: { id: true, email: true, firstName: true, lastName: true } },
     recipientUser: { select: { id: true, email: true, firstName: true, lastName: true } },
     senderItem: { select: { id: true, name: true, unit: true, sku: true, currency: true, category: true } },
+    senderWorkspace: { select: { id: true, name: true } },
     recipientWorkspace: { select: { id: true, name: true } },
     recipientItem: { select: { id: true, name: true, unit: true } },
+    expenseEntry: { select: { id: true } },
+    incomeEntry: { select: { id: true } },
 } satisfies Prisma.StockTransferInclude;
 
 /**
- * Cross-workspace stock transfers — one platform user moving stock to
- * another, with the app as the shared proof.
+ * Cross-workspace stock requests — one platform user asking another for
+ * stock, with the app as the shared proof of the whole exchange.
  *
- * Peer-link mechanics, stock instead of money: the sender proposes from one
- * of their items, addressed to the recipient by email; the recipient accepts
- * into a workspace of their own choosing, picking a matching item or letting
- * one be created from the sender's details. On acceptance both movements
- * post atomically — TRANSFER_OUT on the sender's side, TRANSFER_IN on the
- * receiver's at the same per-unit value — so both books agree on what moved
- * and what it was worth.
+ * REQUEST-DRIVEN, mirroring how supply actually happens — and every stage
+ * is tied to the workspace that owns it:
+ *
+ *   1. REQUEST    Made from an ITEM's page in the requester's workspace:
+ *                 the request names that item (the goods land back into
+ *                 it), so the origin workspace is fixed at creation. The
+ *                 VENDOR sees it in their personal workspace only — the
+ *                 inbox of requests sent in to them. Nothing moves.
+ *   2. SEND       The vendor accepts, naming which of THEIR workspaces
+ *                 (and which item) fulfils it. From here the request
+ *                 belongs to that workspace on the vendor's side — not
+ *                 even their personal workspace shows it anymore. The
+ *                 units leave at the vendor's current weighted average.
+ *   3. RECEIVE    The requester confirms the goods have arrived. No
+ *                 choices: the request already knows its item and
+ *                 workspace. TRANSFER_IN posts at exactly the per-unit
+ *                 value that left the vendor — both books agree.
+ *
+ * Column names predate the rework: "sender" = the VENDOR (stock-out),
+ * "recipient" = the REQUESTER (stock-in).
  */
 @injectable()
 export class StockTransfersService {
@@ -40,233 +57,250 @@ export class StockTransfersService {
         private inventoryService: InventoryService,
     ) { }
 
-    // ─── Propose (sender) ────────────────────────────────
-    async create(senderWorkspaceId: string, senderItemId: string, userId: string, dto: CreateStockTransferDto) {
-        const item = await this.prisma.inventoryItem.findUnique({
-            where: { id: senderItemId },
-            include: { stock: true },
+    /**
+     * The workspace a notification to this user belongs to when the thing
+     * it reports is not tied to any of their workspaces — their personal
+     * workspace. Notifications are listed per workspace, so targeting the
+     * other party's workspace would hide the notification entirely.
+     */
+    private async personalWorkspaceId(userId: string): Promise<string> {
+        const personal = await this.prisma.workspace.findFirst({
+            where: { ownerId: userId, type: WorkspaceType.PERSONAL, isActive: true },
+            select: { id: true },
+            orderBy: { createdAt: 'asc' },
         });
-        if (!item || item.workspaceId !== senderWorkspaceId) {
-            throw new NotFoundError('Inventory item');
-        }
+        if (personal) return personal.id;
+        const fallback = await this.prisma.workspace.findFirst({
+            where: { ownerId: userId, isActive: true },
+            select: { id: true },
+            orderBy: { createdAt: 'asc' },
+        });
+        return fallback?.id ?? '';
+    }
 
-        const recipient = await this.prisma.user.findUnique({
-            where: { email: dto.recipientEmail.toLowerCase() },
-            select: { id: true, isActive: true },
+    // ─── 1. Request (requester) ─────────────────────────
+    /**
+     * Ask a vendor for stock, from an item's page. The item fixes the
+     * origin workspace (its own) and the destination the goods will land
+     * back into; the vendor is addressed by a contact (their linked
+     * account, or the contact's email) or a raw email. Nothing moves: the
+     * request is a question, not a movement.
+     */
+    async createRequest(requesterWorkspaceId: string, userId: string, dto: CreateStockRequestDto) {
+        const requesterWorkspace = await this.prisma.workspace.findUnique({
+            where: { id: requesterWorkspaceId },
         });
-        if (!recipient || !recipient.isActive) {
-            throw new AppError('No active user found with that email', 404, 'USER_NOT_FOUND');
-        }
-        if (recipient.id === userId) {
-            throw new AppError('You cannot transfer stock to yourself', 400, 'SELF_TRANSFER');
+        if (!requesterWorkspace || !requesterWorkspace.isActive) {
+            throw new NotFoundError('Workspace');
         }
 
         const qty = Math.round(dto.quantity);
         if (qty <= 0) {
             throw new AppError('Quantity must be at least 1', 400, 'INVALID_QUANTITY');
         }
-        const available = (item.stock?.quantityOnHand ?? 0) - (item.stock?.quantityReserved ?? 0);
-        if (available < qty) {
-            throw new AppError(
-                `Insufficient stock. Available: ${available}, requested: ${qty}`,
-                400,
-                'INSUFFICIENT_STOCK',
-            );
+
+        // The item being stocked — it must be the requester's own, in the
+        // workspace the request is made from.
+        const item = await this.prisma.inventoryItem.findFirst({
+            where: { id: dto.itemId, workspaceId: requesterWorkspaceId, isActive: true },
+        });
+        if (!item) throw new NotFoundError('Inventory item');
+
+        // Resolve the vendor: preferred by contactId (linked account, then
+        // the contact's recorded email), falling back to a raw email.
+        let vendor: { id: string; isActive: boolean } | null = null;
+        if (dto.contactId) {
+            const contact = await this.prisma.contact.findFirst({
+                where: { id: dto.contactId, workspaceId: requesterWorkspaceId, isActive: true },
+                select: { userId: true, email: true, name: true },
+            });
+            if (!contact) throw new NotFoundError('Contact');
+            if (contact.userId) {
+                vendor = await this.prisma.user.findUnique({
+                    where: { id: contact.userId },
+                    select: { id: true, isActive: true },
+                });
+            } else if (contact.email) {
+                vendor = await this.prisma.user.findUnique({
+                    where: { email: contact.email.toLowerCase() },
+                    select: { id: true, isActive: true },
+                });
+            }
+            if (!vendor) {
+                throw new AppError(
+                    `Contact "${contact.name}" does not have an account on the platform — a stock request needs a vendor who can accept it`,
+                    400,
+                    'CONTACT_HAS_NO_ACCOUNT',
+                );
+            }
+        } else {
+            vendor = await this.prisma.user.findUnique({
+                where: { email: dto.vendorEmail!.toLowerCase() },
+                select: { id: true, isActive: true },
+            });
+        }
+        if (!vendor || !vendor.isActive) {
+            throw new AppError('No active user found with that email', 404, 'USER_NOT_FOUND');
+        }
+        if (vendor.id === userId) {
+            throw new AppError('You cannot request stock from yourself', 400, 'SELF_REQUEST');
         }
 
-        const transfer = await this.prisma.$transaction(async (tx) => {
+        const request = await this.prisma.$transaction(async (tx) => {
             const created = await tx.stockTransfer.create({
                 data: {
                     status: StockTransferStatus.PENDING,
-                    senderUserId: userId,
-                    senderWorkspaceId,
-                    senderItemId,
+                    senderUserId: vendor!.id,
                     quantity: qty,
-                    // The sender's current average cost — a snapshot of what
-                    // the goods are worth today. Informational: the value that
-                    // moves is recomputed at acceptance.
-                    proposedUnitCost: item.stock?.averageCost ?? new Decimal(0),
-                    recipientUserId: recipient.id,
+                    proposedUnitCost: new Decimal(0),
+                    recipientUserId: userId,
+                    // Tied to the origin workspace and its item from the
+                    // start — the vendor's workspace/item only exist once
+                    // they send.
+                    recipientWorkspaceId: requesterWorkspaceId,
+                    recipientItemId: item.id,
                     notes: dto.notes || null,
                 },
             });
             await tx.auditLog.create({
                 data: {
                     userId,
-                    workspaceId: senderWorkspaceId,
+                    workspaceId: requesterWorkspaceId,
                     action: AuditAction.STOCK_TRANSFER_CREATED,
                     resource: 'stock_transfer',
                     resourceId: created.id,
-                    details: { itemId: senderItemId, quantity: qty, recipientUserId: recipient.id } as any,
+                    details: {
+                        request: true,
+                        itemId: item.id,
+                        itemName: item.name,
+                        quantity: qty,
+                        vendorUserId: vendor!.id,
+                    } as any,
                 },
             });
             return created;
         });
 
+        // The vendor tracks unanswered requests in their personal workspace.
+        const vendorInboxId = await this.personalWorkspaceId(vendor.id);
         NotificationsService.dispatch({
             type: NotificationType.STOCK_TRANSFER_RECEIVED,
-            userId: recipient.id,
-            workspaceId: senderWorkspaceId,
-            title: 'Stock transfer incoming',
-            body: `${qty} × ${item.name} is being sent to you — accept to receive it into one of your workspaces`,
+            userId: vendor.id,
+            workspaceId: vendorInboxId,
+            title: 'Stock request',
+            body: `Someone is asking you for ${qty} × ${item.name} — accept and send when you release the stock`,
             entityType: NotificationEntityType.STOCK_TRANSFER,
-            entityId: transfer.id,
-            groupKey: `stock-transfer:${transfer.id}`,
+            entityId: request.id,
+            groupKey: `stock-transfer:${request.id}`,
         });
 
-        return this.getForUser(transfer.id, userId);
+        return this.getForUser(request.id, userId);
     }
 
-    // ─── Accept (recipient picks destination) ────────────
+    // ─── 2. Send (vendor) ────────────────────────────────
     /**
-     * The moment the stock moves: TRANSFER_OUT on the sender's side and
-     * TRANSFER_IN on the receiver's, one transaction, one value. The unit
-     * cost that leaves is exactly the unit cost that arrives.
+     * The vendor accepts and releases the stock: they name which of THEIR
+     * items fulfils the request, and the units leave that workspace at
+     * their current weighted average. From here the request belongs to the
+     * sending workspace on the vendor's side — not even their personal
+     * workspace shows it anymore. The requester holds a "confirm receipt"
+     * until the goods arrive.
      */
-    async accept(transferId: string, userId: string, dto: RespondStockTransferDto) {
+    async send(transferId: string, vendorUserId: string, dto: RespondStockRequestDto) {
         const transfer = await withFinancialTransaction(this.prisma, async (tx) => {
             const pending = await tx.stockTransfer.findUnique({ where: { id: transferId } });
-            if (!pending) throw new NotFoundError('Stock transfer');
-            if (pending.recipientUserId !== userId) {
-                throw new AuthorizationError('Only the recipient can accept this transfer');
+            if (!pending) throw new NotFoundError('Stock request');
+            if (pending.senderUserId !== vendorUserId) {
+                throw new AuthorizationError('Only the vendor can send this stock');
             }
             if (pending.status !== StockTransferStatus.PENDING) {
-                throw new AppError(`This transfer is already ${pending.status.toLowerCase()}`, 400, 'INVALID_STATUS');
+                throw new AppError(`This request is already ${pending.status.toLowerCase()}`, 400, 'INVALID_STATUS');
+            }
+            if (!pending.recipientItemId || !pending.recipientWorkspaceId) {
+                throw new AppError('This request is missing its target item — ask the requester to send it again', 400, 'INVALID_STATE');
             }
 
-            const workspace = await tx.workspace.findUnique({ where: { id: dto.recipientWorkspaceId } });
-            if (!workspace || !workspace.isActive) {
-                throw new NotFoundError('Workspace');
-            }
-            if (workspace.id === pending.senderWorkspaceId) {
-                throw new AppError('Choose one of your own workspaces to receive the stock', 400, 'INVALID_WORKSPACE');
-            }
-            // The recipient must control the chosen workspace.
-            if (workspace.ownerId !== userId) {
+            const requestedItem = await tx.inventoryItem.findUnique({
+                where: { id: pending.recipientItemId },
+                select: { name: true, currency: true },
+            });
+            if (!requestedItem) throw new NotFoundError('Requested inventory item');
+
+            const vendorWorkspaceId = dto.senderWorkspaceId;
+            const workspace = await tx.workspace.findUnique({ where: { id: vendorWorkspaceId } });
+            if (!workspace || !workspace.isActive) throw new NotFoundError('Workspace');
+            if (workspace.ownerId !== vendorUserId) {
                 const membership = await tx.workspaceMember.findUnique({
-                    where: { workspaceId_userId: { workspaceId: workspace.id, userId } },
+                    where: { workspaceId_userId: { workspaceId: vendorWorkspaceId, userId: vendorUserId } },
                 });
-                if (!membership) {
-                    throw new AuthorizationError('You do not have access to that workspace');
+                if (!membership || !['OWNER', 'ADMIN'].includes(membership.role)) {
+                    throw new AuthorizationError('You can only send stock from a workspace you own or administer');
                 }
             }
 
-            const senderItem = await tx.inventoryItem.findUniqueOrThrow({
-                where: { id: pending.senderItemId },
+            const item = await tx.inventoryItem.findUnique({
+                where: { id: dto.senderItemId },
                 include: { stock: true },
             });
-            // Stock has left since the proposal? The guard below refuses it
-            // honestly rather than transferring short.
-            const available = (senderItem.stock?.quantityOnHand ?? 0) - (senderItem.stock?.quantityReserved ?? 0);
+            if (!item || item.workspaceId !== vendorWorkspaceId) {
+                throw new NotFoundError('Inventory item');
+            }
+            if (item.currency !== requestedItem.currency) {
+                throw new AppError(
+                    `That item's currency (${item.currency}) does not match the requested goods (${requestedItem.currency})`,
+                    400,
+                    'CURRENCY_MISMATCH',
+                );
+            }
+
+            const available = (item.stock?.quantityOnHand ?? 0) - (item.stock?.quantityReserved ?? 0);
             if (available < pending.quantity) {
                 throw new AppError(
-                    `Insufficient stock at the sender. Available: ${available}, promised: ${pending.quantity}`,
+                    `Insufficient stock. Available: ${available}, requested: ${pending.quantity}`,
                     400,
                     'INSUFFICIENT_STOCK',
                 );
             }
 
-            // Resolve the receiving item: an existing one, or a new one
-            // created from the sender's details. New items land in the
-            // workspace's currency — checked against the goods below.
-            let recipientItemId = dto.recipientItemId || null;
-            if (recipientItemId) {
-                const target = await tx.inventoryItem.findUnique({ where: { id: recipientItemId } });
-                if (!target || target.workspaceId !== workspace.id) {
-                    throw new NotFoundError('Recipient inventory item');
-                }
-                if (target.currency !== senderItem.currency) {
-                    throw new AppError(
-                        `That item's currency (${target.currency}) does not match the transferred goods (${senderItem.currency})`,
-                        400,
-                        'CURRENCY_MISMATCH',
-                    );
-                }
-            } else {
-                const created = await tx.inventoryItem.create({
-                    data: {
-                        workspaceId: workspace.id,
-                        name: senderItem.name,
-                        unit: senderItem.unit,
-                        category: senderItem.category,
-                        // A workspace holds one currency; a receiving item in
-                        // another would break every stock valuation that
-                        // touches it, so a currency mismatch refuses the
-                        // acceptance up front instead.
-                        currency: workspace.defaultCurrency,
-                        commercialMode: 'SELL_ONLY',
-                        allowNegativeStock: false,
-                    },
-                });
-                await tx.inventoryStock.create({
-                    data: {
-                        itemId: created.id,
-                        quantityOnHand: 0,
-                        quantityRentedOut: 0,
-                        quantityReserved: 0,
-                        averageCost: 0,
-                    },
-                });
-                if (workspace.defaultCurrency !== senderItem.currency) {
-                    throw new AppError(
-                        `That workspace's currency (${workspace.defaultCurrency}) does not match the item's (${senderItem.currency})`,
-                        400,
-                        'CURRENCY_MISMATCH',
-                    );
-                }
-                recipientItemId = created.id;
-            }
-
-            // The sender's stock leaves — real COGS resolution (lots/WAC).
+            // Stock leaves the vendor — real COGS resolution (lots/WAC),
+            // provenance pointing at this request.
             const outTx = await this.inventoryService.processStockOut(
-                pending.senderWorkspaceId,
-                pending.senderItemId,
+                vendorWorkspaceId,
+                item.id,
                 InventoryTransactionType.TRANSFER_OUT,
                 pending.quantity,
-                userId,
+                vendorUserId,
                 InventoryReferenceType.STOCK_TRANSFER,
                 transferId,
-                `Stock transferred out (agreement ${transferId.slice(0, 8)})`,
+                `Stock sent for request ${transferId.slice(0, 8)}`,
                 tx,
             );
 
-            // The same per-unit value arrives on the receiver's side.
-            await this.inventoryService.processStockIn(
-                workspace.id,
-                recipientItemId,
-                InventoryTransactionType.TRANSFER_IN,
-                pending.quantity,
-                outTx.unitCost,
-                userId,
-                InventoryReferenceType.STOCK_TRANSFER,
-                transferId,
-                `Stock received via transfer (agreement ${transferId.slice(0, 8)})`,
-                tx,
-            );
-
-            // PENDING-guarded claim: a concurrent decision cannot double-move stock.
+            // PENDING-guarded transition, with the real vendor fields.
             const { count } = await tx.stockTransfer.updateMany({
                 where: { id: transferId, status: StockTransferStatus.PENDING },
                 data: {
-                    status: StockTransferStatus.ACCEPTED,
-                    recipientWorkspaceId: workspace.id,
-                    recipientItemId,
+                    status: StockTransferStatus.SENT,
+                    senderWorkspaceId: vendorWorkspaceId,
+                    senderItemId: item.id,
+                    proposedUnitCost: outTx.unitCost,
                     respondedAt: new Date(),
+                    sentAt: new Date(),
                 },
             });
             if (count !== 1) {
-                throw new AppError('This transfer is no longer pending', 400, 'INVALID_STATUS');
+                throw new AppError('This request is no longer pending', 400, 'INVALID_STATUS');
             }
 
             await tx.auditLog.create({
                 data: {
-                    userId,
-                    workspaceId: workspace.id,
+                    userId: vendorUserId,
+                    workspaceId: vendorWorkspaceId,
                     action: AuditAction.STOCK_TRANSFER_ACCEPTED,
                     resource: 'stock_transfer',
                     resourceId: transferId,
                     details: {
-                        recipientItemId,
+                        itemId: item.id,
                         quantity: pending.quantity,
                         unitCost: outTx.unitCost.toString(),
                     } as any,
@@ -276,29 +310,119 @@ export class StockTransfersService {
             return tx.stockTransfer.findUniqueOrThrow({ where: { id: transferId } });
         });
 
+        // The requester tracks the request in the workspace it came from.
         NotificationsService.dispatch({
             type: NotificationType.STOCK_TRANSFER_DECIDED,
-            userId: transfer.senderUserId,
-            workspaceId: transfer.senderWorkspaceId,
-            title: 'Stock transfer accepted',
-            body: `${transfer.quantity} units left your inventory and landed in the receiving workspace`,
+            userId: transfer.recipientUserId!,
+            workspaceId: transfer.recipientWorkspaceId!,
+            title: 'Stock on its way',
+            body: `Your requested stock has been released by the vendor — confirm receipt once it reaches you`,
             entityType: NotificationEntityType.STOCK_TRANSFER,
             entityId: transfer.id,
-            groupKey: `stock-transfer:${transfer.id}:decided`,
+            groupKey: `stock-transfer:${transfer.id}:sent`,
         });
 
         return transfer;
     }
 
-    // ─── Decline (recipient) / Cancel (sender) ────────────
-    async decline(transferId: string, userId: string, reason?: string) {
+    // ─── 3. Receive (requester) ──────────────────────────
+    /**
+     * The goods have arrived: the requester confirms receipt. There is
+     * nothing to choose — the request was made from a specific item in a
+     * specific workspace, and that is where the stock lands. TRANSFER_IN
+     * posts at exactly the per-unit value that left the vendor — the two
+     * books can never disagree.
+     */
+    async receive(transferId: string, requesterUserId: string) {
+        const transfer = await withFinancialTransaction(this.prisma, async (tx) => {
+            const sent = await tx.stockTransfer.findUnique({ where: { id: transferId } });
+            if (!sent) throw new NotFoundError('Stock request');
+            if (sent.recipientUserId !== requesterUserId) {
+                throw new AuthorizationError('Only the requester can confirm receipt');
+            }
+            if (sent.status !== StockTransferStatus.SENT) {
+                throw new AppError(`This request is ${sent.status.toLowerCase()} — receipt can only be confirmed after the vendor sends`, 400, 'INVALID_STATUS');
+            }
+            if (!sent.senderWorkspaceId || !sent.senderItemId || !sent.recipientWorkspaceId || !sent.recipientItemId) {
+                throw new AppError('This request is missing its movement details', 400, 'INVALID_STATE');
+            }
+
+            const target = await tx.inventoryItem.findUnique({
+                where: { id: sent.recipientItemId },
+            });
+            if (!target || target.workspaceId !== sent.recipientWorkspaceId || !target.isActive) {
+                throw new NotFoundError('Receiving inventory item');
+            }
+
+            // Stock arrives at the same per-unit value that left the vendor.
+            await this.inventoryService.processStockIn(
+                sent.recipientWorkspaceId,
+                sent.recipientItemId,
+                InventoryTransactionType.TRANSFER_IN,
+                sent.quantity,
+                sent.proposedUnitCost,
+                requesterUserId,
+                InventoryReferenceType.STOCK_TRANSFER,
+                transferId,
+                `Stock received for request ${transferId.slice(0, 8)}`,
+                tx,
+            );
+
+            // SENT-guarded transition.
+            const { count } = await tx.stockTransfer.updateMany({
+                where: { id: transferId, status: StockTransferStatus.SENT },
+                data: {
+                    status: StockTransferStatus.COMPLETED,
+                    receivedAt: new Date(),
+                },
+            });
+            if (count !== 1) {
+                throw new AppError('This request is no longer awaiting receipt', 400, 'INVALID_STATUS');
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId: requesterUserId,
+                    workspaceId: sent.recipientWorkspaceId,
+                    action: AuditAction.STOCK_TRANSFER_ACCEPTED,
+                    resource: 'stock_transfer',
+                    resourceId: transferId,
+                    details: {
+                        received: true,
+                        recipientItemId: sent.recipientItemId,
+                        quantity: sent.quantity,
+                        unitCost: sent.proposedUnitCost.toString(),
+                    } as any,
+                },
+            });
+
+            return tx.stockTransfer.findUniqueOrThrow({ where: { id: transferId } });
+        });
+
+        // The vendor tracks the sent request in the workspace that sent it.
+        NotificationsService.dispatch({
+            type: NotificationType.STOCK_TRANSFER_DECIDED,
+            userId: transfer.senderUserId,
+            workspaceId: transfer.senderWorkspaceId!,
+            title: 'Stock received',
+            body: `The stock you sent has been confirmed received — the exchange is complete`,
+            entityType: NotificationEntityType.STOCK_TRANSFER,
+            entityId: transfer.id,
+            groupKey: `stock-transfer:${transfer.id}:received`,
+        });
+
+        return transfer;
+    }
+
+    // ─── Decline (vendor) / Cancel (requester) ────────────
+    async decline(transferId: string, vendorUserId: string, reason?: string) {
         const transfer = await this.prisma.stockTransfer.findUnique({ where: { id: transferId } });
-        if (!transfer) throw new NotFoundError('Stock transfer');
-        if (transfer.recipientUserId !== userId) {
-            throw new AuthorizationError('Only the recipient can decline this transfer');
+        if (!transfer) throw new NotFoundError('Stock request');
+        if (transfer.senderUserId !== vendorUserId) {
+            throw new AuthorizationError('Only the vendor can decline this request');
         }
         if (transfer.status !== StockTransferStatus.PENDING) {
-            throw new AppError(`This transfer is already ${transfer.status.toLowerCase()}`, 400, 'INVALID_STATUS');
+            throw new AppError('Only pending requests can be declined. Sent stock is received — or reversed from the movement history.', 400, 'INVALID_STATUS');
         }
 
         const { count } = await this.prisma.$transaction(async (tx) => {
@@ -309,8 +433,8 @@ export class StockTransfersService {
             if (res.count === 1) {
                 await tx.auditLog.create({
                     data: {
-                        userId,
-                        workspaceId: transfer.senderWorkspaceId,
+                        userId: vendorUserId,
+                        workspaceId: null,
                         action: AuditAction.STOCK_TRANSFER_DECLINED,
                         resource: 'stock_transfer',
                         resourceId: transferId,
@@ -321,15 +445,16 @@ export class StockTransfersService {
             return res;
         });
         if (count !== 1) {
-            throw new AppError('This transfer is no longer pending', 400, 'INVALID_STATUS');
+            throw new AppError('This request is no longer pending', 400, 'INVALID_STATUS');
         }
 
+        // The requester tracks their request in the workspace it came from.
         NotificationsService.dispatch({
             type: NotificationType.STOCK_TRANSFER_DECIDED,
-            userId: transfer.senderUserId,
-            workspaceId: transfer.senderWorkspaceId,
-            title: 'Stock transfer declined',
-            body: `The stock transfer you proposed was declined${reason ? `: ${reason}` : ''}`,
+            userId: transfer.recipientUserId!,
+            workspaceId: transfer.recipientWorkspaceId!,
+            title: 'Stock request declined',
+            body: `Your stock request was declined${reason ? `: ${reason}` : ''}`,
             entityType: NotificationEntityType.STOCK_TRANSFER,
             entityId: transferId,
             groupKey: `stock-transfer:${transferId}:decided`,
@@ -338,14 +463,17 @@ export class StockTransfersService {
         return this.prisma.stockTransfer.findUniqueOrThrow({ where: { id: transferId } });
     }
 
-    async cancel(transferId: string, userId: string, reason?: string) {
+    async cancel(transferId: string, requesterUserId: string, reason?: string) {
         const transfer = await this.prisma.stockTransfer.findUnique({ where: { id: transferId } });
-        if (!transfer) throw new NotFoundError('Stock transfer');
-        if (transfer.senderUserId !== userId) {
-            throw new AuthorizationError('Only the sender can cancel this transfer');
+        if (!transfer) throw new NotFoundError('Stock request');
+        if (transfer.recipientUserId !== requesterUserId) {
+            throw new AuthorizationError('Only the requester can cancel this request');
+        }
+        if (transfer.status === StockTransferStatus.SENT) {
+            throw new AppError('The stock has already been released — receive it, or coordinate a return with the vendor', 400, 'INVALID_STATUS');
         }
         if (transfer.status !== StockTransferStatus.PENDING) {
-            throw new AppError('Only pending transfers can be cancelled. Accepted ones already moved the stock.', 400, 'INVALID_STATUS');
+            throw new AppError('Only pending requests can be cancelled', 400, 'INVALID_STATUS');
         }
 
         const { count } = await this.prisma.$transaction(async (tx) => {
@@ -356,8 +484,8 @@ export class StockTransfersService {
             if (res.count === 1) {
                 await tx.auditLog.create({
                     data: {
-                        userId,
-                        workspaceId: transfer.senderWorkspaceId,
+                        userId: requesterUserId,
+                        workspaceId: null,
                         action: AuditAction.STOCK_TRANSFER_CANCELLED,
                         resource: 'stock_transfer',
                         resourceId: transferId,
@@ -368,15 +496,17 @@ export class StockTransfersService {
             return res;
         });
         if (count !== 1) {
-            throw new AppError('This transfer is no longer pending', 400, 'INVALID_STATUS');
+            throw new AppError('This request is no longer pending', 400, 'INVALID_STATUS');
         }
 
+        // A pending request still lives in the vendor's personal inbox.
+        const vendorInboxId = await this.personalWorkspaceId(transfer.senderUserId);
         NotificationsService.dispatch({
             type: NotificationType.STOCK_TRANSFER_DECIDED,
-            userId: transfer.recipientUserId!,
-            workspaceId: transfer.senderWorkspaceId,
-            title: 'Stock transfer cancelled',
-            body: 'The stock transfer awaiting you was withdrawn by its sender',
+            userId: transfer.senderUserId,
+            workspaceId: vendorInboxId,
+            title: 'Stock request cancelled',
+            body: 'The stock request awaiting you was withdrawn by its requester',
             entityType: NotificationEntityType.STOCK_TRANSFER,
             entityId: transferId,
             groupKey: `stock-transfer:${transferId}:decided`,
@@ -385,12 +515,230 @@ export class StockTransfersService {
         return this.prisma.stockTransfer.findUniqueOrThrow({ where: { id: transferId } });
     }
 
+    // ─── The money legs (one-time each) ──────────────────
+    /**
+     * The requester's side: record the purchase cost as an EXPENSE in the
+     * receiving workspace's book. One-time, guarded and claimed atomically —
+     * the same discipline as the rental contract's money legs.
+     */
+    async recordExpense(transferId: string, userId: string, dto: RecordTransferEntryDto) {
+        const { EntriesService } = await import('../entries/entries.service');
+        const { container } = await import('tsyringe');
+
+        const transfer = await this.prisma.stockTransfer.findUnique({
+            where: { id: transferId },
+            select: {
+                id: true, status: true, recipientUserId: true, recipientWorkspaceId: true,
+                quantity: true, proposedUnitCost: true, expenseEntryId: true,
+                senderItem: { select: { name: true, currency: true } },
+                senderUser: { select: { firstName: true, lastName: true } },
+            },
+        });
+        if (!transfer) throw new NotFoundError('Stock request');
+        if (transfer.recipientUserId !== userId) {
+            throw new AuthorizationError('Only the requester can record this expense');
+        }
+        if (transfer.status !== StockTransferStatus.COMPLETED) {
+            throw new AppError('Confirm receipt of the stock before recording its cost', 400, 'INVALID_STATUS');
+        }
+        if (!transfer.senderItem) {
+            throw new AppError('The vendor has not released stock for this request yet', 400, 'INVALID_STATUS');
+        }
+        if (!transfer.recipientWorkspaceId) {
+            throw new AppError('This request is missing its receiving workspace', 400, 'INVALID_STATE');
+        }
+        const senderItem = transfer.senderItem;
+        const recipientWorkspaceId = transfer.recipientWorkspaceId;
+
+        const cashbook = await this.prisma.cashbook.findUnique({ where: { id: dto.cashbookId } });
+        if (!cashbook || !cashbook.isActive) throw new NotFoundError('Cashbook');
+        if (cashbook.workspaceId !== recipientWorkspaceId) {
+            throw new AppError(
+                'The stock cost can only be recorded in the workspace that received it',
+                400,
+                'WRONG_WORKSPACE',
+            );
+        }
+        if (cashbook.currency !== senderItem.currency) {
+            throw new AppError(
+                `This book's currency (${cashbook.currency}) does not match the goods (${senderItem.currency})`,
+                400,
+                'CURRENCY_MISMATCH',
+            );
+        }
+
+        const cost = transfer.proposedUnitCost.mul(transfer.quantity);
+        if (cost.lessThanOrEqualTo(0)) {
+            throw new AppError('This request carries no unit cost — record the purchase manually', 400, 'NO_CHARGE');
+        }
+        if (transfer.expenseEntryId) {
+            throw new AppError('The stock expense has already been recorded for this request', 409, 'ALREADY_RECORDED');
+        }
+
+        const vendorName = `${transfer.senderUser.firstName} ${transfer.senderUser.lastName}`.trim();
+
+        return withFinancialTransaction(this.prisma, async (tx) => {
+            const entry = await container.resolve(EntriesService).createEntryWithin(
+                tx,
+                cashbook.id,
+                userId,
+                {
+                    type: 'EXPENSE',
+                    amount: cost.toFixed(4),
+                    description: `Stock purchase — ${transfer.quantity} × ${senderItem.name} — ${vendorName}`,
+                    accountId: dto.accountId,
+                    entryDate: dto.entryDate ?? new Date().toISOString(),
+                } as any,
+            );
+
+            const { count } = await tx.stockTransfer.updateMany({
+                where: { id: transferId, expenseEntryId: null },
+                data: { expenseEntryId: entry.id },
+            });
+            if (count !== 1) {
+                throw new AppError('The stock expense has already been recorded for this request', 409, 'ALREADY_RECORDED');
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId,
+                    workspaceId: recipientWorkspaceId,
+                    action: AuditAction.STOCK_TRANSFER_EXPENSE_RECORDED,
+                    resource: 'stock_transfer',
+                    resourceId: transferId,
+                    details: { entryId: entry.id, amount: cost.toString() } as any,
+                },
+            });
+
+            return entry;
+        });
+    }
+
+    /**
+     * The vendor's side: record the sale value as INCOME in their own book.
+     * One-time, same guards.
+     */
+    async recordIncome(transferId: string, userId: string, dto: RecordTransferEntryDto) {
+        const { EntriesService } = await import('../entries/entries.service');
+        const { container } = await import('tsyringe');
+
+        const transfer = await this.prisma.stockTransfer.findUnique({
+            where: { id: transferId },
+            select: {
+                id: true, status: true, senderUserId: true, senderWorkspaceId: true,
+                quantity: true, proposedUnitCost: true, incomeEntryId: true,
+                senderItem: { select: { name: true, currency: true } },
+                recipientUser: { select: { firstName: true, lastName: true } },
+            },
+        });
+        if (!transfer) throw new NotFoundError('Stock request');
+        if (transfer.senderUserId !== userId) {
+            throw new AuthorizationError('Only the vendor can record this income');
+        }
+        // The vendor's income can be recorded once the goods have left (SENT)
+        // — the sale happened at send, receipt only completes the exchange.
+        if (transfer.status !== StockTransferStatus.SENT && transfer.status !== StockTransferStatus.COMPLETED) {
+            throw new AppError('Send the stock before recording its income', 400, 'INVALID_STATUS');
+        }
+        if (!transfer.senderItem) {
+            throw new AppError('The vendor has not released stock for this request yet', 400, 'INVALID_STATUS');
+        }
+        if (!transfer.senderWorkspaceId) {
+            throw new AppError('This request is missing its sending workspace', 400, 'INVALID_STATE');
+        }
+        const senderItem = transfer.senderItem;
+        const senderWorkspaceId = transfer.senderWorkspaceId;
+
+        const cashbook = await this.prisma.cashbook.findUnique({ where: { id: dto.cashbookId } });
+        if (!cashbook || !cashbook.isActive) throw new NotFoundError('Cashbook');
+        if (cashbook.workspaceId !== senderWorkspaceId) {
+            throw new AppError(
+                'The stock income can only be recorded in the vendor workspace that sent it',
+                400,
+                'WRONG_WORKSPACE',
+            );
+        }
+        if (cashbook.currency !== senderItem.currency) {
+            throw new AppError(
+                `This book's currency (${cashbook.currency}) does not match the goods (${senderItem.currency})`,
+                400,
+                'CURRENCY_MISMATCH',
+            );
+        }
+
+        const value = transfer.proposedUnitCost.mul(transfer.quantity);
+        if (value.lessThanOrEqualTo(0)) {
+            throw new AppError('This request carries no unit cost — record the sale manually', 400, 'NO_CHARGE');
+        }
+        if (transfer.incomeEntryId) {
+            throw new AppError('The stock income has already been recorded for this request', 409, 'ALREADY_RECORDED');
+        }
+
+        const buyerName = [transfer.recipientUser?.firstName, transfer.recipientUser?.lastName].filter(Boolean).join(' ') || 'the customer';
+
+        return withFinancialTransaction(this.prisma, async (tx) => {
+            const entry = await container.resolve(EntriesService).createEntryWithin(
+                tx,
+                cashbook.id,
+                userId,
+                {
+                    type: 'INCOME',
+                    amount: value.toFixed(4),
+                    description: `Stock sale — ${transfer.quantity} × ${senderItem.name} — ${buyerName}`,
+                    accountId: dto.accountId,
+                    entryDate: dto.entryDate ?? new Date().toISOString(),
+                } as any,
+            );
+
+            const { count } = await tx.stockTransfer.updateMany({
+                where: { id: transferId, incomeEntryId: null },
+                data: { incomeEntryId: entry.id },
+            });
+            if (count !== 1) {
+                throw new AppError('The stock income has already been recorded for this request', 409, 'ALREADY_RECORDED');
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId,
+                    workspaceId: senderWorkspaceId,
+                    action: AuditAction.STOCK_TRANSFER_INCOME_RECORDED,
+                    resource: 'stock_transfer',
+                    resourceId: transferId,
+                    details: { entryId: entry.id, amount: value.toString() } as any,
+                },
+            });
+
+            return entry;
+        });
+    }
+
     // ─── Query ───────────────────────────────────────────
     async list(userId: string, query: StockTransferQueryDto) {
         const where: Prisma.StockTransferWhereInput = {};
-        if (query.direction === 'sent') {
+        if (query.workspaceId) {
+            /*
+             * One workspace's view: the requests it made, and the requests it
+             * sent. A pending request addressed to the current user belongs
+             * to none of their workspaces yet, so it surfaces only in their
+             * personal workspace — the vendor's inbox of sent-in requests.
+             */
+            const workspace = await this.prisma.workspace.findUnique({
+                where: { id: query.workspaceId },
+                select: { ownerId: true, type: true },
+            });
+            where.OR = [
+                { recipientUserId: userId, recipientWorkspaceId: query.workspaceId },
+                { senderUserId: userId, senderWorkspaceId: query.workspaceId },
+            ];
+            if (workspace?.type === WorkspaceType.PERSONAL && workspace.ownerId === userId) {
+                where.OR.push({ senderUserId: userId, senderWorkspaceId: null, status: StockTransferStatus.PENDING });
+            }
+        } else if (query.direction === 'sent') {
+            // The vendor's view: requests addressed to them.
             where.senderUserId = userId;
         } else if (query.direction === 'received') {
+            // The requester's view: requests they made.
             where.recipientUserId = userId;
         } else {
             where.OR = [{ senderUserId: userId }, { recipientUserId: userId }];
@@ -427,56 +775,60 @@ export class StockTransfersService {
             where: { id: transferId },
             include: TRANSFER_INCLUDE,
         });
-        if (!transfer) throw new NotFoundError('Stock transfer');
+        if (!transfer) throw new NotFoundError('Stock request');
         if (transfer.senderUserId !== userId && transfer.recipientUserId !== userId) {
-            throw new AuthorizationError('You are not a party to this transfer');
+            throw new AuthorizationError('You are not a party to this request');
         }
         return transfer;
     }
 
-    /**
-     * The recipient's acceptance options: their workspaces (currency-matched
-     * against the goods), and within the chosen one the items that could
-     * receive the stock — same name or same unit — plus the fallback of
-     * creating a new item.
-     */
-    async getAcceptanceOptions(transferId: string, userId: string) {
-        const transfer = await this.getForUser(transferId, userId);
-        if (transfer.recipientUserId !== userId) {
-            throw new AuthorizationError('Only the recipient can respond to this transfer');
+    /** The vendor's sending options for a pending request: their owned/admin
+     *  workspaces, and in each the items that could fulfil it — filtered to
+     *  the requested item's currency so only valid picks are offered. */
+    async getSendOptions(transferId: string, vendorUserId: string) {
+        const transfer = await this.getForUser(transferId, vendorUserId);
+        if (transfer.senderUserId !== vendorUserId) {
+            throw new AuthorizationError('Only the vendor can respond to this request');
         }
         if (transfer.status !== StockTransferStatus.PENDING) {
-            throw new AppError(`This transfer is already ${transfer.status.toLowerCase()}`, 400, 'INVALID_STATUS');
+            throw new AppError(`This request is already ${transfer.status.toLowerCase()}`, 400, 'INVALID_STATUS');
         }
 
-        const senderItem = await this.prisma.inventoryItem.findUniqueOrThrow({
-            where: { id: transfer.senderItemId },
-            select: { name: true, unit: true, currency: true, category: true },
-        });
+        const requestedItem = transfer.recipientItemId
+            ? await this.prisma.inventoryItem.findUnique({
+                where: { id: transfer.recipientItemId },
+                select: { id: true, name: true, unit: true, currency: true },
+            })
+            : null;
 
-        const workspaces = await this.prisma.workspace.findMany({
-            where: { OR: [{ ownerId: userId }, { members: { some: { userId } } }], isActive: true },
-            select: { id: true, name: true, defaultCurrency: true, type: true },
-        });
-        const eligible = workspaces.filter(
-            (w) => w.id !== transfer.senderWorkspaceId && w.defaultCurrency === senderItem.currency,
-        );
+        const [owned, adminMemberships] = await Promise.all([
+            this.prisma.workspace.findMany({
+                where: { ownerId: vendorUserId, isActive: true },
+                select: { id: true, name: true, defaultCurrency: true },
+            }),
+            this.prisma.workspaceMember.findMany({
+                where: { userId: vendorUserId, role: { in: ['OWNER', 'ADMIN'] } },
+                select: { workspace: { select: { id: true, name: true, defaultCurrency: true, isActive: true } } },
+            }),
+        ]);
+        const admin = adminMemberships.map((m) => m.workspace).filter((w) => w.isActive);
+        const seen = new Set<string>();
+        const workspaces = [...owned, ...admin].filter((w) => !seen.has(w.id) && seen.add(w.id));
 
-        // Suggest matching items across the recipient's eligible workspaces —
-        // same name first, same unit as a weaker signal.
-        const wsIds = eligible.map((w) => w.id);
+        const wsIds = workspaces.map((w) => w.id);
         const items = wsIds.length
             ? await this.prisma.inventoryItem.findMany({
                 where: {
                     workspaceId: { in: wsIds },
                     isActive: true,
-                    OR: [{ name: senderItem.name }, { unit: senderItem.unit }],
+                    // Only items that can actually fulfil the request.
+                    ...(requestedItem ? { currency: requestedItem.currency } : {}),
                 },
-                select: { id: true, name: true, unit: true, workspaceId: true, sku: true },
+                select: { id: true, name: true, unit: true, sku: true, workspaceId: true, currency: true },
                 orderBy: { name: 'asc' },
             })
             : [];
 
-        return { workspaces: eligible, suggestedItems: items, senderItem };
+        return { workspaces, items, requestedItem };
     }
 }
