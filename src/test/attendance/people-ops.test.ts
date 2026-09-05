@@ -61,13 +61,20 @@ async function fixture() {
 }
 
 beforeEach(async () => {
-    // Lock the time so lateFixture is reliably "late" (e.g. 15:00 UTC = 18:00 Kampala, 
+    // Lock the time so lateFixture is reliably "late" (e.g. 15:00 UTC = 18:00 Kampala,
     // which is 18 hours after 00:01 local time).
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-09T15:00:00Z'));
 
     await resetDatabase();
     clearClockCache();
+});
+
+afterEach(() => {
+    // The file-level afterAll (setup.ts) disconnects Prisma, whose engine
+    // schedules with real timers; leaving the fake clock installed makes that
+    // disconnect hang until hookTimeout.
+    vi.useRealTimers();
 });
 
 describe('requesting leave', () => {

@@ -1,6 +1,10 @@
 /**
  * Ledger backfill, against synthetic pre-ledger data.
  *
+ * Runs the REAL script as a child process against this worker's private
+ * database (process.env.DATABASE_URL — see runBackfill), so what ships is
+ * what is tested.
+ *
  * Builds a workspace the way the old code would have — entries, wallet
  * transactions, transfers, obligations and opening balances, with cached
  * balances but no journals — then runs the backfill and asserts the books come
@@ -30,7 +34,10 @@ function runBackfill(workspaceId: string, apply: boolean): string {
     return execFileSync('npx', args, {
         cwd: ROOT,
         encoding: 'utf8',
-        env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL_TEST },
+        // process.env.DATABASE_URL IS this worker's private database under
+        // the parallel harness — the script must see the same rows the test
+        // built. (DATABASE_URL_TEST is the shared pristine template.)
+        env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
     });
 }
 

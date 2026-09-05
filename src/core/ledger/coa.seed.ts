@@ -10,6 +10,7 @@ import { AuditAction } from '../../core/types';
 import {
     BOOK_CASH_PARENT_CODE,
     CHART_OF_ACCOUNTS,
+    CoaTemplateRow,
     DEFAULT_ACCOUNT_TYPES,
     WalletSeed,
     WALLET_ASSET_PARENT_CODE,
@@ -32,6 +33,87 @@ function scopedCode(code: string, currency: string, baseCurrency: string): strin
 }
 
 /**
+ * Insert the template rows a workspace is missing, level by level.
+ *
+ * Replaces the old row-by-row upsert loop (34 sequential round trips per
+ * provision, ~110 provisions per test run) with findMany + createMany passes.
+ * Semantics are identical to the upserts:
+ *   - existing rows are never touched (skipDuplicates), so an accountant's
+ *     rename survives a re-provision;
+ *   - a concurrent provisioner's rows are picked up by the refresh after each
+ *     level, so children always reference real parent ids.
+ *
+ * `code -> id` is refreshed from the database after every level rather than
+ * trusted from the generated ids, because a racing transaction may have
+ * inserted the same code first and its row is the one that persisted.
+ */
+async function createMissingChartRows(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    currency: string,
+    baseCurrency: string,
+    rows: Array<{ row: CoaTemplateRow; code: string }>,
+): Promise<Map<string, string>> {
+    const allCodes = rows.map((r) => r.code);
+
+    const loadMap = async (): Promise<Map<string, string>> => {
+        const existing = await tx.ledgerAccount.findMany({
+            where: { workspaceId, code: { in: allCodes } },
+            select: { code: true, id: true },
+        });
+        return new Map(existing.map((a) => [a.code, a.id]));
+    };
+
+    let known = await loadMap();
+    let remaining = rows.filter((r) => !known.has(r.code));
+
+    while (remaining.length > 0) {
+        // Template order guarantees parents precede children, so every level
+        // has at least one ready row; an empty ready set means the template
+        // itself is malformed (a child whose parent is not in the template).
+        const ready = remaining.filter(
+            ({ row }) => !row.parentCode || known.has(scopedCodeOf(row.parentCode, rows)),
+        );
+        if (ready.length === 0) {
+            throw new Error(
+                `Chart of accounts template is malformed: unresolvable parents among ` +
+                `${remaining.map((r) => r.code).join(', ')} for workspace ${workspaceId}`,
+            );
+        }
+
+        await tx.ledgerAccount.createMany({
+            data: ready.map(({ row, code }) => ({
+                workspaceId,
+                code,
+                name: currency === baseCurrency ? row.name : `${row.name} (${currency})`,
+                class: row.class,
+                normalBalance: normalBalanceFor(row.class),
+                origin: LedgerAccountOrigin.SYSTEM,
+                systemKey: row.systemKey ?? null,
+                parentId: row.parentCode ? known.get(scopedCodeOf(row.parentCode, rows))! : null,
+                currency,
+                isCashEquivalent: row.isCashEquivalent ?? false,
+                isPostable: row.isPostable ?? true,
+                isProtected: true,
+            })),
+            skipDuplicates: true,
+        });
+
+        known = await loadMap();
+        remaining = rows.filter((r) => !known.has(r.code));
+    }
+
+    return known;
+}
+
+/** Resolve a template parentCode against the scoped codes of this provisioning. */
+function scopedCodeOf(parentCode: string, rows: Array<{ row: CoaTemplateRow; code: string }>): string {
+    const match = rows.find((r) => r.row.code === parentCode);
+    if (!match) return parentCode;
+    return match.code;
+}
+
+/**
  * Create this workspace's chart of accounts if absent, and return the
  * systemKey -> ledgerAccountId map that posting rules resolve against.
  *
@@ -46,43 +128,19 @@ export async function ensureWorkspaceChartOfAccounts(
     currency: string,
     baseCurrency: string = currency,
 ): Promise<SystemAccountMap> {
-    const codeToId = new Map<string, string>();
+    const scoped = CHART_OF_ACCOUNTS.map((row) => ({
+        row,
+        code: scopedCode(row.code, currency, baseCurrency),
+    }));
 
-    // Template order guarantees parents precede children.
-    for (const row of CHART_OF_ACCOUNTS) {
-        const code = scopedCode(row.code, currency, baseCurrency);
-        const parentId = row.parentCode
-            ? codeToId.get(scopedCode(row.parentCode, currency, baseCurrency)) ?? null
-            : null;
-
-        const account = await tx.ledgerAccount.upsert({
-            where: { workspaceId_code: { workspaceId, code } },
-            // Never overwrite an accountant's rename; only ensure existence.
-            update: {},
-            create: {
-                workspaceId,
-                code,
-                name: currency === baseCurrency ? row.name : `${row.name} (${currency})`,
-                class: row.class,
-                normalBalance: normalBalanceFor(row.class),
-                origin: LedgerAccountOrigin.SYSTEM,
-                systemKey: row.systemKey ?? null,
-                parentId,
-                currency,
-                isCashEquivalent: row.isCashEquivalent ?? false,
-                isPostable: row.isPostable ?? true,
-                isProtected: true,
-            },
-            select: { id: true },
-        });
-
-        codeToId.set(code, account.id);
-    }
+    const codeToId = await createMissingChartRows(tx, workspaceId, currency, baseCurrency, scoped);
 
     const systemMap: SystemAccountMap = new Map();
     for (const row of CHART_OF_ACCOUNTS) {
         if (row.systemKey) {
-            systemMap.set(row.systemKey, codeToId.get(scopedCode(row.code, currency, baseCurrency))!);
+            const id = codeToId.get(scopedCode(row.code, currency, baseCurrency));
+            if (!id) throw new Error(`Chart of accounts is missing ${row.code} for workspace ${workspaceId}`);
+            systemMap.set(row.systemKey, id);
         }
     }
 
@@ -122,15 +180,21 @@ export async function ensureDefaultAccountTypes(
     tx: Prisma.TransactionClient,
     workspaceId: string,
 ): Promise<void> {
-    for (const type of DEFAULT_ACCOUNT_TYPES) {
-        await tx.accountType.upsert({
-            where: { name_workspaceId: { name: type.name, workspaceId } },
-            update: {},
-            create: {
+    const existing = await tx.accountType.findMany({
+        where: { workspaceId, name: { in: DEFAULT_ACCOUNT_TYPES.map((t) => t.name) } },
+        select: { name: true },
+    });
+    const have = new Set(existing.map((t) => t.name));
+    const missing = DEFAULT_ACCOUNT_TYPES.filter((t) => !have.has(t.name));
+
+    if (missing.length > 0) {
+        await tx.accountType.createMany({
+            data: missing.map((t) => ({
                 workspaceId,
-                name: type.name,
-                classification: type.classification as AccountClassification,
-            },
+                name: t.name,
+                classification: t.classification as AccountClassification,
+            })),
+            skipDuplicates: true,
         });
     }
 }

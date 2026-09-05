@@ -54,7 +54,7 @@ describe('wallet ledger posting', () => {
         const types = await testPrisma.accountType.findMany({ where: { workspaceId: workspace.id } });
         // Previously seeded nowhere, which made wallet creation impossible.
         expect(types.map((t: { name: string }) => t.name).sort()).toEqual(
-            ['Bank', 'Cash', 'Credit Card', 'Loan', 'Mobile Money'],
+            ['Bank', 'Cash', 'Credit Card', 'Digital Wallet', 'Loan', 'Mobile Money'],
         );
     });
 

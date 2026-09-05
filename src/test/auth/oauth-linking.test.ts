@@ -25,7 +25,10 @@ import { AuditAction } from '../../core/types';
 const authService = () => resolveService(AuthService) as any;
 
 /** Typed pass-through so `testPrisma.$transaction` can still infer `tx`. */
-function resolveOAuthUser(tx: Prisma.TransactionClient, args: unknown) {
+function resolveOAuthUser(
+    tx: Prisma.TransactionClient,
+    args: unknown,
+): Promise<{ user: { id: string; email: string }; isNewUser: boolean }> {
     return authService().resolveOAuthUser(tx, args);
 }
 
