@@ -12,10 +12,12 @@ import { resetDatabase, testPrisma } from '../setup';
 import { resolveService } from '../container';
 import { InventoryService } from '../../modules/inventory/inventory.service';
 import { UnitsOfMeasureService } from '../../modules/inventory/units-of-measure.service';
+import { ItemCategoriesService } from '../../modules/inventory/item-categories.service';
 import { createWorkspace, createUser } from '../factories';
 
 const inventory = () => resolveService(InventoryService);
 const units = () => resolveService(UnitsOfMeasureService);
+const itemCategories = () => resolveService(ItemCategoriesService);
 
 async function fixture() {
     const user = await createUser();
@@ -208,5 +210,71 @@ describe('inventory stats (the metric cards)', () => {
         expect(stats.totalItems).toBe(0);
         expect(stats.rentable).toBe(0);
         expect(stats.lowStock).toBe(0);
+    });
+});
+
+describe('item categories', () => {
+    beforeEach(resetDatabase);
+
+    it('creates, is idempotent by name, renames and propagates to items', async () => {
+        const f = await fixture();
+
+        const created = await itemCategories().create(f.workspace.id, f.user.id, 'Rental assets');
+        // Re-creating the same name returns the same row — the picker fires
+        // this on every selection.
+        const again = await itemCategories().create(f.workspace.id, f.user.id, 'Rental assets');
+        expect(again.id).toBe(created.id);
+
+        // An item carries the category by name…
+        await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Projector', unit: 'pcs', category: 'Rental assets',
+            commercialMode: 'SELL_AND_RENT', allowNegativeStock: false,
+        } as any);
+
+        // …so the rename updates it in step.
+        await itemCategories().rename(created.id, f.workspace.id, f.user.id, 'Hire equipment');
+        const item = await testPrisma.inventoryItem.findFirstOrThrow({
+            where: { workspaceId: f.workspace.id },
+        });
+        expect(item.category).toBe('Hire equipment');
+    });
+
+    it('refuses to delete a category in use, allows when free', async () => {
+        const f = await fixture();
+        const category = await itemCategories().create(f.workspace.id, f.user.id, 'Electronics');
+
+        await inventory().createItem(f.workspace.id, f.user.id, {
+            name: 'Cables', unit: 'pcs', category: 'Electronics',
+            commercialMode: 'SELL_ONLY', allowNegativeStock: false,
+        } as any);
+
+        await expect(itemCategories().remove(category.id, f.workspace.id, f.user.id))
+            .rejects.toMatchObject({ code: 'CATEGORY_IN_USE' });
+
+        const free = await itemCategories().create(f.workspace.id, f.user.id, 'Packaging');
+        await itemCategories().remove(free.id, f.workspace.id, f.user.id);
+        expect(await testPrisma.itemCategory.count({ where: { workspaceId: f.workspace.id } })).toBe(1);
+    });
+
+    it('refuses a rename that clashes with an existing category', async () => {
+        const f = await fixture();
+        const a = await itemCategories().create(f.workspace.id, f.user.id, 'Tools');
+        await itemCategories().create(f.workspace.id, f.user.id, 'Spare parts');
+
+        await expect(itemCategories().rename(a.id, f.workspace.id, f.user.id, 'Spare parts'))
+            .rejects.toMatchObject({ code: 'DUPLICATE_CATEGORY' });
+    });
+
+    it('lists workspace-scoped and name-ordered', async () => {
+        const f = await fixture();
+        await itemCategories().create(f.workspace.id, f.user.id, 'Packaging');
+        await itemCategories().create(f.workspace.id, f.user.id, 'Electronics');
+
+        const otherUser = await createUser();
+        const otherWs = await createWorkspace(otherUser.id);
+        await itemCategories().create(otherWs.id, otherUser.id, 'Private category');
+
+        const listed = await itemCategories().list(f.workspace.id);
+        expect(listed.map((c) => c.name)).toEqual(['Electronics', 'Packaging']);
     });
 });

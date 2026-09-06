@@ -27,6 +27,7 @@ import accountsRoutes from '../modules/accounts/accounts.routes';
 import accountTransactionsRoutes from '../modules/account-transactions/account-transactions.routes';
 import inventoryRoutes from '../modules/inventory/inventory.routes';
 import { unitsOfMeasureRouter } from '../modules/inventory/units-of-measure.routes';
+import { itemCategoriesRouter } from '../modules/inventory/item-categories.routes';
 import { agreementsRouter } from '../modules/inventory/agreements.routes';
 import catalogRoutes from '../modules/catalog/catalog.routes';
 import invoicingRoutes from '../modules/invoicing/invoicing.routes';
@@ -54,6 +55,7 @@ router.use('/workspaces/:workspaceId/accounts', accountsRoutes);
 router.use('/workspaces/:workspaceId/accounts/:accountId/transactions', accountTransactionsRoutes);
 router.use('/workspaces/:workspaceId/inventory', inventoryRoutes);
 router.use('/workspaces/:workspaceId/units-of-measure', unitsOfMeasureRouter);
+router.use('/workspaces/:workspaceId/item-categories', itemCategoriesRouter);
 // Person-scoped for everything after the proposal — see agreements.routes.ts.
 router.use('/agreements', agreementsRouter);
 // Proposal routes are workspace-scoped: the goods must be the sender's, and

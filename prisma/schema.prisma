@@ -208,6 +208,7 @@ model Workspace {
   peerLinksInitiated     PeerLink[]              @relation("PeerLinkInitiatorWorkspace")
   peerLinksCounterparty  PeerLink[]              @relation("PeerLinkCounterpartyWorkspace")
   unitsOfMeasure         UnitOfMeasure[]
+  itemCategories         ItemCategory[]
   stockTransfersSent     StockTransfer[]         @relation("StockTransferSenderWorkspace")
   stockTransfersReceived StockTransfer[]         @relation("StockTransferRecipientWorkspace")
   rentalAgreements       RentalAgreement[]       @relation("RentalAgreementLenderWorkspace")
@@ -1574,6 +1575,24 @@ model UnitOfMeasure {
   @@unique([workspaceId, name])
   @@index([workspaceId])
   @@map("units_of_measure")
+}
+
+/// The workspace's inventory item-category vocabulary. Items store category
+/// as free text (the historical column), so — like units of measure — this
+/// curates the vocabulary the item form suggests from, renameable, with the
+/// name as the join. A category referenced by items cannot be deleted.
+model ItemCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  name        String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("item_categories")
 }
 
 enum ProductServiceType {
