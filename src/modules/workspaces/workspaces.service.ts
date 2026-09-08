@@ -56,6 +56,22 @@ export class WorkspacesService {
                 },
             });
 
+            // The workspace's own identity — who it is when it appears in
+            // someone else's books, and the issuer half of its invoices.
+            //
+            // Seeded from the name and the owner's account email, which are
+            // both already known and verified, so the workspace can be shared
+            // as a contact immediately instead of stopping at a form. The
+            // email is a starting point the org can change to a proper
+            // billing address whenever it has one.
+            await tx.workspaceProfile.create({
+                data: {
+                    workspaceId: ws.id,
+                    displayName: dto.name,
+                    email: ws.owner?.email ?? null,
+                },
+            });
+
             // Chart of accounts + default wallet types. Without this the
             // workspace cannot post a journal, and (before the ledger existed)
             // could not even create a wallet, since nothing seeded AccountType.

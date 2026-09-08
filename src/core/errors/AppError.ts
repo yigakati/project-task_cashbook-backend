@@ -54,6 +54,27 @@ export class EmailNotVerifiedError extends AppError {
     }
 }
 
+/**
+ * A workspace was asked to hand its details to someone before it had stated
+ * any. Carries which workspace and which fields are missing so the client can
+ * put the form in front of the user and retry, rather than dead-ending on a
+ * message they cannot act on.
+ */
+export class WorkspaceProfileIncompleteError extends AppError {
+    public readonly workspaceId: string;
+    public readonly missing: string[];
+
+    constructor(workspaceId: string, missing: string[]) {
+        super(
+            'Add your workspace contact details before sharing them.',
+            StatusCodes.CONFLICT,
+            'WORKSPACE_PROFILE_INCOMPLETE',
+        );
+        this.workspaceId = workspaceId;
+        this.missing = missing;
+    }
+}
+
 export class AuthorizationError extends AppError {
     constructor(message = 'Insufficient permissions') {
         super(message, StatusCodes.FORBIDDEN, 'AUTHORIZATION_ERROR');

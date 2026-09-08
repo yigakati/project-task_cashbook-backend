@@ -324,10 +324,39 @@ export class InvoicingService {
         let obligationId: string | null = null;
 
         await this.prisma.$transaction(async (tx) => {
-            // 1. Mark invoice as SENT
+            // 1. Mark invoice as SENT, freezing who it was billed to.
+            //
+            // The customer row is live, and for a contact connected to another
+            // workspace it now refreshes from that workspace's own profile.
+            // Without this snapshot, their next address change would silently
+            // rewrite what this already-issued invoice claims.
+            const billTo = await tx.contact.findUnique({
+                where: { id: invoice.customerId },
+                select: {
+                    name: true, email: true, phone: true, company: true,
+                    customerProfile: {
+                        select: { billingAddress: true, taxId: true, accountNumber: true },
+                    },
+                },
+            });
+
             await tx.invoice.update({
                 where: { id: invoiceId },
-                data: { status: InvoiceStatus.SENT },
+                data: {
+                    status: InvoiceStatus.SENT,
+                    billToSnapshot: billTo
+                        ? ({
+                            name: billTo.name,
+                            email: billTo.email,
+                            phone: billTo.phone,
+                            company: billTo.company,
+                            taxId: billTo.customerProfile?.taxId ?? null,
+                            accountNumber: billTo.customerProfile?.accountNumber ?? null,
+                            billingAddress: billTo.customerProfile?.billingAddress ?? null,
+                            snapshotAt: new Date().toISOString(),
+                        } as any)
+                        : undefined,
+                },
             });
 
             // 2. Create a RECEIVABLE obligation linked back to this invoice

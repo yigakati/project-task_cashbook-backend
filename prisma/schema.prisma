@@ -78,6 +78,8 @@ model User {
   apiKeysCreated           ApiKey[]                @relation("ApiKeyCreator")
   apiKeysRevoked           ApiKey[]                @relation("ApiKeyRevoker")
   linkedIdentities         LinkedIdentity[]
+  contactLinksRequested    ContactLinkRequest[]    @relation("ContactLinkRequester")
+  contactLinksReceived     ContactLinkRequest[]    @relation("ContactLinkRecipient")
   settlementsRecorded      PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
   peerLinksInitiated       PeerLink[]              @relation("PeerLinkInitiator")
   peerLinksReceived        PeerLink[]              @relation("PeerLinkCounterparty")
@@ -215,6 +217,12 @@ model Workspace {
   auditLogs              AuditLog[]
   financialAuditLogs     FinancialAuditLog[]
   pendingInvites         PendingInvite[]
+  profile                WorkspaceProfile?
+  contactLinksAsA        ContactLink[]           @relation("ContactLinkWorkspaceA")
+  contactLinksAsB        ContactLink[]           @relation("ContactLinkWorkspaceB")
+  contactLinkRequestsOut ContactLinkRequest[]    @relation("ContactLinkRequestRequester")
+  contactLinkRequestsIn  ContactLinkRequest[]    @relation("ContactLinkRequestRecipient")
+  linkedFromContacts     Contact[]               @relation("ContactLinkedWorkspace")
   accountTypes           AccountType[]
   accounts               Account[]
   accountCategories      AccountCategory[]
@@ -738,8 +746,30 @@ model Contact {
   /// making a new "Jane Doe" per claim.
   userId String? @map("user_id") @db.Uuid
 
+  /// Set when this contact is a live connection to another workspace on the
+  /// platform rather than details someone typed in. The name/email/phone/
+  /// company columns above (and the CustomerProfile below) stay the single
+  /// place everything reads from — invoices, obligations and reports need no
+  /// knowledge of linking — but for a linked contact they are a CACHE of the
+  /// counterparty's own WorkspaceProfile, refreshed when they change it.
+  ///
+  /// Deliberately keyed on the workspace, not the user: a person can be both
+  /// STAFF here (which occupies the [workspaceId, userId] unique below) and
+  /// the face of a supplier org, and those must be able to coexist.
+  linkedWorkspaceId String? @map("linked_workspace_id") @db.Uuid
+  contactLinkId     String? @map("contact_link_id") @db.Uuid
+
+  /// The exact values the last sync wrote, so a later sync can tell "still
+  /// what we wrote" (safe to refresh) from "a human edited this since"
+  /// (leave it alone). Without this, syncing would silently clobber the
+  /// local corrections people make to a counterparty's details.
+  linkedSnapshot Json?     @map("linked_snapshot")
+  linkedSyncedAt DateTime? @map("linked_synced_at")
+
   workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user             User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  linkedWorkspace  Workspace?           @relation("ContactLinkedWorkspace", fields: [linkedWorkspaceId], references: [id], onDelete: SetNull)
+  contactLink      ContactLink?         @relation(fields: [contactLinkId], references: [id], onDelete: SetNull)
   entries          Entry[]
   customerProfile  CustomerProfile?
   obligations      CashbookObligation[]
@@ -750,9 +780,144 @@ model Contact {
 
   /// One staff contact per person per workspace.
   @@unique([workspaceId, userId])
+  /// One contact per connected workspace — the guard that makes "link into the
+  /// existing row" the only possible outcome of accepting twice.
+  @@unique([workspaceId, linkedWorkspaceId])
   @@index([workspaceId])
   @@index([type])
+  @@index([contactLinkId])
   @@map("contacts")
+}
+
+// ─── Cross-workspace contact connections ───────────────
+//
+// Recording a counterparty who is themselves on the platform, by asking them
+// rather than typing their details in. The request is addressed to a USER, not
+// a workspace: which of their workspaces answers is chosen at acceptance, so a
+// person in several orgs sees one request and decides which org it belongs to.
+// That is also why "first workspace to accept wins" needs no cleanup — the
+// request was never sitting in the others to begin with.
+
+enum ContactLinkRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  EXPIRED
+}
+
+enum ContactLinkState {
+  ACTIVE
+  /// Either side stopped sharing. Both keep the details they already had —
+  /// they are business records — but no further updates flow.
+  REVOKED
+}
+
+model ContactLinkRequest {
+  id     String                   @id @default(uuid()) @db.Uuid
+  status ContactLinkRequestStatus @default(PENDING)
+
+  requesterUserId      String @map("requester_user_id") @db.Uuid
+  requesterWorkspaceId String @map("requester_workspace_id") @db.Uuid
+
+  /// How the requester files them once connected. The recipient's own side
+  /// defaults to the inverse (a CUSTOMER here is a VENDOR there).
+  requestedType ContactType @default(CUSTOMER) @map("requested_type")
+
+  /// An existing hand-typed contact this connection should attach to, resolved
+  /// when the request is sent. Keeps entries and invoices already recorded
+  /// against that row intact instead of stranding them beside a new duplicate.
+  requesterContactId String? @map("requester_contact_id") @db.Uuid
+
+  /// Known from the start; the workspace is not.
+  recipientUserId      String  @map("recipient_user_id") @db.Uuid
+  /// Chosen by the recipient at acceptance. Null until then, and stays null
+  /// if declined, cancelled or expired.
+  recipientWorkspaceId String? @map("recipient_workspace_id") @db.Uuid
+  recipientType        ContactType? @map("recipient_type")
+
+  message        String?
+  declinedReason String?   @map("declined_reason")
+  respondedAt    DateTime? @map("responded_at")
+  expiresAt      DateTime  @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  requesterUser      User        @relation("ContactLinkRequester", fields: [requesterUserId], references: [id])
+  recipientUser      User        @relation("ContactLinkRecipient", fields: [recipientUserId], references: [id])
+  requesterWorkspace Workspace   @relation("ContactLinkRequestRequester", fields: [requesterWorkspaceId], references: [id], onDelete: Cascade)
+  recipientWorkspace Workspace?  @relation("ContactLinkRequestRecipient", fields: [recipientWorkspaceId], references: [id], onDelete: SetNull)
+  link               ContactLink?
+
+  @@index([recipientUserId, status])
+  @@index([requesterWorkspaceId, status])
+  @@index([status])
+  @@map("contact_link_requests")
+}
+
+model ContactLink {
+  id    String           @id @default(uuid()) @db.Uuid
+  state ContactLinkState @default(ACTIVE)
+
+  /// Stored with the lexicographically smaller id as A, so the same pair can
+  /// never be inserted twice in opposite order.
+  workspaceAId String @map("workspace_a_id") @db.Uuid
+  workspaceBId String @map("workspace_b_id") @db.Uuid
+
+  requestId String? @unique @map("request_id") @db.Uuid
+
+  revokedByWorkspaceId String?   @map("revoked_by_workspace_id") @db.Uuid
+  revokedAt            DateTime? @map("revoked_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  workspaceA Workspace           @relation("ContactLinkWorkspaceA", fields: [workspaceAId], references: [id], onDelete: Cascade)
+  workspaceB Workspace           @relation("ContactLinkWorkspaceB", fields: [workspaceBId], references: [id], onDelete: Cascade)
+  request    ContactLinkRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  contacts   Contact[]
+
+  @@unique([workspaceAId, workspaceBId])
+  @@index([state])
+  @@map("contact_links")
+}
+
+/// A workspace's own identity and billing details — who it is when it appears
+/// in someone else's books, and the issuer half of its invoices.
+///
+/// Distinct from CustomerProfile, which is a workspace's record of SOMEONE
+/// ELSE. This is the half that was missing: there was previously nowhere for
+/// an org to state its own legal name, tax id or address.
+model WorkspaceProfile {
+  id          String @id @default(uuid()) @db.Uuid
+  workspaceId String @unique @map("workspace_id") @db.Uuid
+
+  /// What counterparties see. Required — everything else may be blank.
+  displayName String  @map("display_name")
+  legalName   String? @map("legal_name")
+  email       String?
+  phone       String?
+  website     String?
+
+  /// Billing side. Optional by design: a connection is useful long before
+  /// anyone has a tax id to put on an invoice.
+  taxId          String? @map("tax_id")
+  registrationNo String? @map("registration_no")
+  addressLine1   String? @map("address_line1")
+  addressLine2   String? @map("address_line2")
+  city           String?
+  state          String?
+  postalCode     String? @map("postal_code")
+  country        String?
+  billingEmail   String? @map("billing_email")
+  /// Bank / mobile-money instructions, free-form per market.
+  paymentDetails Json?   @map("payment_details")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_profiles")
 }
 
 model CustomerProfile {
@@ -1676,6 +1841,16 @@ model Invoice {
   amountDue      Decimal       @default(0) @map("amount_due") @db.Decimal(20, 4)
   notes          String?
   footer         String?
+
+  /// Who this was billed to, frozen when the invoice left DRAFT.
+  ///
+  /// The customer relation below is a LIVE row — and for a linked contact it
+  /// now refreshes from the counterparty's own profile — so without this an
+  /// address change would silently rewrite what every past invoice claims it
+  /// was issued to. Null on invoices issued before this existed; readers fall
+  /// back to the live customer in that case.
+  billToSnapshot Json?         @map("bill_to_snapshot")
+
   cashbookId     String?       @map("cashbook_id") @db.Uuid
   createdById    String        @map("created_by_id") @db.Uuid
   createdAt      DateTime      @default(now()) @map("created_at")
@@ -2679,6 +2854,8 @@ enum NotificationType {
   STOCK_TRANSFER_DECIDED
   RENTAL_AGREEMENT_RECEIVED
   RENTAL_AGREEMENT_DECIDED
+  CONTACT_LINK_RECEIVED
+  CONTACT_LINK_DECIDED
 }
 
 /// What a notification points at, so it can link to something other than a task
@@ -2697,6 +2874,7 @@ enum NotificationEntityType {
   PEER_LINK_SETTLEMENT
   STOCK_TRANSFER
   RENTAL_AGREEMENT
+  CONTACT_LINK_REQUEST
 }
 
 model Notification {

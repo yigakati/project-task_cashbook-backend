@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { StatusCodes } from 'http-status-codes';
-import { AppError, EmailNotVerifiedError } from '../core/errors/AppError';
+import { AppError, EmailNotVerifiedError, WorkspaceProfileIncompleteError } from '../core/errors/AppError';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { ApiResponse } from '../core/types';
@@ -12,7 +12,12 @@ export function errorHandler(
     _next: NextFunction
 ): void {
     if (err instanceof AppError) {
-        const response: ApiResponse & { code?: string; email?: string } = {
+        const response: ApiResponse & {
+            code?: string;
+            email?: string;
+            workspaceId?: string;
+            missing?: string[];
+        } = {
             success: false,
             message: err.message,
             code: err.code,
@@ -23,6 +28,12 @@ export function errorHandler(
             // pre-populated without requiring the user to re-enter it.
             ...(err instanceof EmailNotVerifiedError && {
                 email: err.email,
+            }),
+            // Which workspace still needs details, and which ones, so the
+            // client can collect them inline and retry the same action.
+            ...(err instanceof WorkspaceProfileIncompleteError && {
+                workspaceId: err.workspaceId,
+                missing: err.missing,
             }),
         };
 

@@ -7,6 +7,10 @@ import cashbooksRoutes from '../modules/cashbooks/cashbooks.routes';
 import entriesRoutes from '../modules/entries/entries.routes';
 import categoriesRoutes from '../modules/categories/categories.routes';
 import contactsRoutes from '../modules/contacts/contacts.routes';
+import {
+    contactLinksWorkspaceRouter,
+    contactLinksRouter,
+} from '../modules/contact-links/contact-links.routes';
 import paymentModesRoutes from '../modules/payment-modes/payment-modes.routes';
 import filesRoutes from '../modules/files/files.routes';
 import reportsRoutes from '../modules/reports/reports.routes';
@@ -83,6 +87,8 @@ router.use('/peer-links', peerLinksRouter);
 router.use('/entries', entriesRoutes);
 router.use('/categories', categoriesRoutes);
 router.use('/contacts', contactsRoutes);
+router.use('/workspaces/:workspaceId/contact-links', contactLinksWorkspaceRouter);
+router.use('/contact-links', contactLinksRouter);
 router.use('/payment-modes', paymentModesRoutes);
 router.use('/files', filesRoutes);
 router.use('/reports', reportsRoutes);
