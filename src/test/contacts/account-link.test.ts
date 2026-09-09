@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { resetDatabase, testPrisma } from '../setup';
-import { createWorkspace, createUser } from '../factories';
+import { createWorkspace, createUser, enableManualContacts } from '../factories';
 import { resolveService } from '../container';
 import { ContactsService } from '../../modules/contacts/contacts.service';
 
@@ -21,6 +21,7 @@ describe('contact → account resolution (list)', () => {
     it('a normally-created customer with a matching email resolves to the account', async () => {
         const owner = await createUser();
         const workspace = await createWorkspace(owner.id);
+        await enableManualContacts();
 
         // The same person, both sides of the platform.
         const user = await createUser({ email: `customer-${Date.now()}@test.local` });
@@ -42,6 +43,7 @@ describe('contact → account resolution (list)', () => {
     it('contacts without a matching account stay unlinked', async () => {
         const owner = await createUser();
         const workspace = await createWorkspace(owner.id);
+        await enableManualContacts();
         const service = contacts();
 
         await service.createContact(workspace.id, owner.id, {
@@ -64,6 +66,7 @@ describe('contact → account resolution (list)', () => {
     it('inactive accounts do not count as linkable', async () => {
         const owner = await createUser();
         const workspace = await createWorkspace(owner.id);
+        await enableManualContacts();
 
         const deactivated = await createUser({ email: `gone-${Date.now()}@test.local` });
         await testPrisma.user.update({
@@ -85,6 +88,7 @@ describe('contact → account resolution (list)', () => {
     it('an explicit userId link is preserved untouched', async () => {
         const owner = await createUser();
         const workspace = await createWorkspace(owner.id);
+        await enableManualContacts();
         const linkedUser = await createUser({ email: `linked-${Date.now()}@test.local` });
 
         // Auto-created (the peer-links shape): userId set at creation.

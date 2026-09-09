@@ -5,11 +5,12 @@
  * service or repository, and wrote no audit rows for any of its four actions.
  */
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, ReferralStatus } from '@prisma/client';
 import { superAdminEmails } from '../../config';
 import { AppError, NotFoundError } from '../../core/errors/AppError';
 import { AuditAction, FeatureKey, WorkspaceType } from '../../core/types';
 import { logger } from '../../utils/logger';
+import { generateUniqueReferralCode } from '../referrals/referrals.helpers';
 
 export interface SuperAdminReconciliation {
     promoted: string[];
@@ -159,6 +160,9 @@ export class PlatformService {
                     id: true, email: true, firstName: true, lastName: true,
                     isActive: true, isSuperAdmin: true, emailVerified: true,
                     provider: true, lastLoginAt: true, createdAt: true,
+                    // So the "make agent" action can show the current state
+                    // rather than inviting a second, pointless click.
+                    referralAgent: { select: { id: true, code: true, isActive: true } },
                     _count: { select: { ownedWorkspaces: true, workspaceMemberships: true } },
                 },
                 orderBy: { createdAt: 'desc' },
@@ -261,7 +265,7 @@ export class PlatformService {
         if (!workspace) throw new NotFoundError('Workspace');
 
         /*
-         * Business workspaces only.
+         * Business workspaces only — for the modules that genuinely need one.
          *
          * A personal workspace is one person's own books: it has no staff to
          * tag, no attendants, no shifts to reconcile, and `requireTicketing`
@@ -269,12 +273,19 @@ export class PlatformService {
          * there produces a module that cannot be staffed and a nav entry that
          * leads nowhere.
          *
+         * MANUAL_CONTACTS is deliberately not in this set: a personal
+         * workspace keeps contacts like any other, so the grant has to be
+         * available there too.
+         *
          * Enforced here rather than only hiding the button, because a hidden
          * button is not a restriction — this endpoint is reachable directly.
          * Disabling is always allowed, so a flag set before this rule existed
          * can still be cleared.
          */
-        if (params.enabled && workspace.type !== WorkspaceType.BUSINESS) {
+        const businessOnly: FeatureKey[] = [FeatureKey.TICKETING];
+        if (params.enabled
+            && businessOnly.includes(params.feature)
+            && workspace.type !== WorkspaceType.BUSINESS) {
             throw new AppError(
                 `${params.feature} is a business module and cannot be enabled for a personal workspace.`,
                 400,
@@ -328,6 +339,187 @@ export class PlatformService {
         });
 
         return { workspaceId: params.workspaceId, features };
+    }
+
+
+    // ─── Referral agents ───────────────────────────────
+
+    /**
+     * Appoint someone a referral agent, or revoke them.
+     *
+     * Appointing mints a code on first appointment and reuses it forever
+     * after: an agent whose code changed between one poster and the next would
+     * lose every referral still in flight against the old one.
+     */
+    async setReferralAgent(params: {
+        targetUserId: string;
+        actorId: string;
+        isActive: boolean;
+        notes?: string;
+    }) {
+        const user = await this.prisma.user.findUnique({
+            where: { id: params.targetUserId },
+            select: {
+                id: true, email: true, firstName: true, lastName: true,
+                isActive: true, isSuperAdmin: true,
+            },
+        });
+        if (!user) throw new NotFoundError('User');
+
+        if (params.isActive && !user.isActive) {
+            throw new AppError(
+                'This account is deactivated and cannot be appointed a referral agent.',
+                400,
+                'USER_INACTIVE',
+            );
+        }
+
+        /*
+         * Superadmins are not eligible.
+         *
+         * They can appoint agents, read every agent's figures, and reach the
+         * accounts behind them — so crediting referrals to themselves is
+         * marking their own homework. Keeping the two roles apart costs
+         * nothing and removes the question entirely.
+         *
+         * Revoking stays allowed, so somebody promoted to superadmin after
+         * being appointed can still be cleaned up.
+         */
+        if (params.isActive && user.isSuperAdmin) {
+            throw new AppError(
+                'Superadmins cannot be referral agents.',
+                400,
+                'SUPERADMIN_INELIGIBLE',
+            );
+        }
+
+        const existing = await this.prisma.referralAgent.findUnique({
+            where: { userId: params.targetUserId },
+        });
+
+        const agent = existing
+            ? await this.prisma.referralAgent.update({
+                where: { userId: params.targetUserId },
+                data: {
+                    isActive: params.isActive,
+                    revokedAt: params.isActive ? null : new Date(),
+                    ...(params.notes !== undefined ? { notes: params.notes } : {}),
+                },
+            })
+            : await this.prisma.referralAgent.create({
+                data: {
+                    userId: params.targetUserId,
+                    code: await generateUniqueReferralCode(this.prisma),
+                    isActive: params.isActive,
+                    appointedById: params.actorId,
+                    notes: params.notes,
+                    revokedAt: params.isActive ? null : new Date(),
+                },
+            });
+
+        await this.prisma.auditLog.create({
+            data: {
+                userId: params.actorId,
+                action: params.isActive
+                    ? AuditAction.REFERRAL_AGENT_APPOINTED
+                    : AuditAction.REFERRAL_AGENT_REVOKED,
+                resource: 'referral_agent',
+                resourceId: agent.id,
+                details: {
+                    targetUserId: user.id,
+                    targetEmail: user.email,
+                    code: agent.code,
+                    platformAction: AuditAction.ADMIN_WORKSPACE_ACTION,
+                } as any,
+            },
+        });
+
+        return agent;
+    }
+
+    async listReferralAgents(params: { page: number; limit: number; search?: string }) {
+        const skip = (params.page - 1) * params.limit;
+        const where = params.search
+            ? {
+                OR: [
+                    { code: { contains: params.search, mode: 'insensitive' as const } },
+                    { user: { email: { contains: params.search, mode: 'insensitive' as const } } },
+                    { user: { firstName: { contains: params.search, mode: 'insensitive' as const } } },
+                    { user: { lastName: { contains: params.search, mode: 'insensitive' as const } } },
+                ],
+            }
+            : {};
+
+        const [total, agents] = await Promise.all([
+            this.prisma.referralAgent.count({ where }),
+            this.prisma.referralAgent.findMany({
+                where,
+                select: {
+                    id: true, code: true, isActive: true, appointedAt: true,
+                    revokedAt: true, notes: true,
+                    user: { select: { id: true, email: true, firstName: true, lastName: true } },
+                    _count: { select: { referrals: true } },
+                },
+                orderBy: { appointedAt: 'desc' },
+                skip,
+                take: params.limit,
+            }),
+        ]);
+
+        // Verified is the number that means anything — a signup whose address
+        // was never confirmed is not evidence of a person.
+        const verifiedCounts = await this.prisma.referral.groupBy({
+            by: ['agentId'],
+            where: {
+                agentId: { in: agents.map((a) => a.id) },
+                status: ReferralStatus.VERIFIED,
+            },
+            _count: { _all: true },
+        });
+        const verifiedByAgent = new Map(
+            verifiedCounts.map((row) => [row.agentId, row._count._all]),
+        );
+
+        const data = agents.map((a) => ({
+            ...a,
+            totals: {
+                all: a._count.referrals,
+                verified: verifiedByAgent.get(a.id) ?? 0,
+            },
+        }));
+
+        return { data, total, page: params.page, limit: params.limit };
+    }
+
+    async listAgentReferrals(agentId: string, params: { page: number; limit: number }) {
+        const agent = await this.prisma.referralAgent.findUnique({
+            where: { id: agentId },
+            select: { id: true, code: true, user: { select: { email: true, firstName: true, lastName: true } } },
+        });
+        if (!agent) throw new NotFoundError('Referral agent');
+
+        const skip = (params.page - 1) * params.limit;
+        const [total, data] = await Promise.all([
+            this.prisma.referral.count({ where: { agentId } }),
+            this.prisma.referral.findMany({
+                where: { agentId },
+                select: {
+                    id: true, status: true, source: true, signupMethod: true,
+                    attributedAt: true, verifiedAt: true,
+                    referredUser: {
+                        select: {
+                            id: true, email: true, firstName: true, lastName: true,
+                            emailVerified: true, createdAt: true,
+                        },
+                    },
+                },
+                orderBy: { attributedAt: 'desc' },
+                skip,
+                take: params.limit,
+            }),
+        ]);
+
+        return { agent, data, total, page: params.page, limit: params.limit };
     }
 
     /** Platform-wide audit trail. The old admin module had no way to read this. */

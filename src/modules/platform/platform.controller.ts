@@ -2,6 +2,7 @@ import { injectable } from 'tsyringe';
 import { Response, NextFunction } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { PlatformService } from './platform.service';
+import { PlatformSettingsService } from './platform-settings.service';
 import { AuthenticatedRequest } from '../../core/types';
 
 const page = (v: unknown) => Math.max(1, Number(v) || 1);
@@ -9,7 +10,10 @@ const limit = (v: unknown) => Math.min(100, Math.max(1, Number(v) || 20));
 
 @injectable()
 export class PlatformController {
-    constructor(private service: PlatformService) { }
+    constructor(
+        private service: PlatformService,
+        private settings: PlatformSettingsService,
+    ) { }
 
     async getStats(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
@@ -148,6 +152,103 @@ export class PlatformController {
             res.status(StatusCodes.OK).json({
                 success: true,
                 message: 'Superadmins reconciled with configuration',
+                data,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async setReferralAgent(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.service.setReferralAgent({
+                targetUserId: req.params.userId as string,
+                actorId: req.user.userId,
+                isActive: req.body.isActive,
+                notes: req.body.notes,
+            });
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: data.isActive ? 'Referral agent appointed' : 'Referral agent revoked',
+                data,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async listReferralAgents(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.service.listReferralAgents({
+                page: page(req.query.page),
+                limit: limit(req.query.limit),
+                search: req.query.search as string | undefined,
+            });
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Referral agents retrieved',
+                data: result.data,
+                pagination: {
+                    page: result.page,
+                    limit: result.limit,
+                    total: result.total,
+                    totalPages: Math.ceil(result.total / result.limit),
+                },
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async listAgentReferrals(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const result = await this.service.listAgentReferrals(req.params.agentId as string, {
+                page: page(req.query.page),
+                limit: limit(req.query.limit),
+            });
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Referrals retrieved',
+                data: result.data,
+                agent: result.agent,
+                pagination: {
+                    page: result.page,
+                    limit: result.limit,
+                    total: result.total,
+                    totalPages: Math.ceil(result.total / result.limit),
+                },
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    // ─── Platform-wide settings ────────────────────────
+
+    async getSettings(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.settings.getAll();
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Platform settings retrieved',
+                data,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async updateSettings(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.settings.setManualContacts(
+                req.body.manualContactsEnabled,
+                req.user.userId,
+            );
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: data.manualContactsEnabled
+                    ? 'Manual contacts switched on for every workspace'
+                    : 'Manual contacts switched off for every workspace',
                 data,
             });
         } catch (error) {

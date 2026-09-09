@@ -80,6 +80,10 @@ model User {
   linkedIdentities         LinkedIdentity[]
   contactLinksRequested    ContactLinkRequest[]    @relation("ContactLinkRequester")
   contactLinksReceived     ContactLinkRequest[]    @relation("ContactLinkRecipient")
+  referralAgent            ReferralAgent?          @relation("ReferralAgentUser")
+  referralAgentsAppointed  ReferralAgent[]         @relation("ReferralAgentAppointer")
+  platformSettingsEdited   PlatformSetting[]       @relation("PlatformSettingEditor")
+  referredBy               Referral?               @relation("ReferredUser")
   settlementsRecorded      PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
   peerLinksInitiated       PeerLink[]              @relation("PeerLinkInitiator")
   peerLinksReceived        PeerLink[]              @relation("PeerLinkCounterparty")
@@ -829,8 +833,15 @@ model ContactLinkRequest {
   /// against that row intact instead of stranding them beside a new duplicate.
   requesterContactId String? @map("requester_contact_id") @db.Uuid
 
-  /// Known from the start; the workspace is not.
-  recipientUserId      String  @map("recipient_user_id") @db.Uuid
+  /// The address the request is aimed at, lowercased. Always set — it is what
+  /// an invite is emailed to, and what a later signup is matched against, so
+  /// it is the stable key whether or not an account exists yet.
+  recipientEmail       String  @map("recipient_email")
+
+  /// Null while the invitee has no account. Filled in the moment someone signs
+  /// up with `recipientEmail`, which is what moves the request into their
+  /// inbox to accept or decline like any other.
+  recipientUserId      String? @map("recipient_user_id") @db.Uuid
   /// Chosen by the recipient at acceptance. Null until then, and stays null
   /// if declined, cancelled or expired.
   recipientWorkspaceId String? @map("recipient_workspace_id") @db.Uuid
@@ -844,12 +855,15 @@ model ContactLinkRequest {
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
   requesterUser      User        @relation("ContactLinkRequester", fields: [requesterUserId], references: [id])
-  recipientUser      User        @relation("ContactLinkRecipient", fields: [recipientUserId], references: [id])
+  recipientUser      User?       @relation("ContactLinkRecipient", fields: [recipientUserId], references: [id])
   requesterWorkspace Workspace   @relation("ContactLinkRequestRequester", fields: [requesterWorkspaceId], references: [id], onDelete: Cascade)
   recipientWorkspace Workspace?  @relation("ContactLinkRequestRecipient", fields: [recipientWorkspaceId], references: [id], onDelete: SetNull)
   link               ContactLink?
 
   @@index([recipientUserId, status])
+  /// Looked up on every signup, to hand a new account the invites already
+  /// waiting for its address.
+  @@index([recipientEmail, status])
   @@index([requesterWorkspaceId, status])
   @@index([status])
   @@map("contact_link_requests")
@@ -879,6 +893,104 @@ model ContactLink {
   @@unique([workspaceAId, workspaceBId])
   @@index([state])
   @@map("contact_links")
+}
+
+/// Platform-wide switches, set by a superadmin and true of every workspace at
+/// once.
+///
+/// Distinct from WorkspaceFeature, which unlocks a module for ONE organisation.
+/// Some decisions are not per-org at all — whether contact details may be typed
+/// in by hand is a statement about how the product works, and granting it to
+/// one workspace while refusing the next would be arbitrary rather than
+/// deliberate.
+///
+/// Key/value so a new switch costs a row rather than a migration.
+model PlatformSetting {
+  key         String   @id
+  value       Json
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  updatedBy User? @relation("PlatformSettingEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("platform_settings")
+}
+
+// ─── Referrals ─────────────────────────────────────────
+//
+// A superadmin appoints someone a referral agent; they share a link carrying
+// their code, and whoever signs up through it is credited to them. Attribution
+// is first-touch and permanent — the row is written once, when the account is
+// created, and never rewritten.
+
+enum ReferralSource {
+  /// Followed the agent's share link; the code rode along automatically.
+  LINK
+  /// Typed the code into the signup form — a code heard rather than clicked.
+  CODE
+}
+
+enum ReferralStatus {
+  /// Account created; the address behind it is still unproven.
+  SIGNED_UP
+  /// Email verified, so this is a person rather than a typo or a throwaway.
+  /// The distinction is what stops referral counts from rewarding noise.
+  VERIFIED
+}
+
+model ReferralAgent {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @unique @map("user_id") @db.Uuid
+
+  /// The shareable code. Uppercase, and generated from an alphabet with the
+  /// confusable characters (O/0, I/1/L) removed, because these get read aloud
+  /// and written on paper as often as they get clicked.
+  code String @unique
+
+  /// Revoking sets this false rather than deleting the row: the referrals
+  /// already credited to them still have to point somewhere.
+  isActive Boolean @default(true) @map("is_active")
+
+  appointedById String    @map("appointed_by_id") @db.Uuid
+  appointedAt   DateTime  @default(now()) @map("appointed_at")
+  revokedAt     DateTime? @map("revoked_at")
+  notes         String?
+
+  user        User       @relation("ReferralAgentUser", fields: [userId], references: [id], onDelete: Cascade)
+  appointedBy User       @relation("ReferralAgentAppointer", fields: [appointedById], references: [id])
+  referrals   Referral[]
+
+  @@index([isActive])
+  @@map("referral_agents")
+}
+
+model Referral {
+  id      String @id @default(uuid()) @db.Uuid
+  agentId String @map("agent_id") @db.Uuid
+
+  /// One attribution per person, ever — enforced here rather than in code, so
+  /// a second signup path can never quietly double-credit the same account.
+  referredUserId String @unique @map("referred_user_id") @db.Uuid
+
+  /// The code exactly as used, snapshotted. An agent's code could be reissued
+  /// later; what earned this referral should not change with it.
+  code         String
+  source       ReferralSource
+  /// Which signup route was taken. Worth keeping: it is the only way to see
+  /// whether link attribution is actually surviving the OAuth round trip.
+  signupMethod AuthProvider   @map("signup_method")
+
+  status       ReferralStatus @default(SIGNED_UP)
+  attributedAt DateTime       @default(now()) @map("attributed_at")
+  verifiedAt   DateTime?      @map("verified_at")
+
+  agent        ReferralAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  referredUser User          @relation("ReferredUser", fields: [referredUserId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, status])
+  @@index([attributedAt])
+  @@map("referrals")
 }
 
 /// A workspace's own identity and billing details — who it is when it appears

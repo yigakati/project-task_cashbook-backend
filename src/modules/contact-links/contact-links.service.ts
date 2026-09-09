@@ -20,6 +20,10 @@ import { hasWorkspacePermission, WorkspacePermission } from '../../core/types/wo
 import { checkProfileCompleteness } from '../workspace-profile/workspace-profile.dto';
 import { ensureWorkspaceProfile } from '../workspace-profile/workspace-profile.helpers';
 import { NotificationsService, NotificationJobData } from '../notifications/notifications.service';
+import { sendEmail } from '../../config/email';
+import { contactInviteSignupEmailTemplate } from '../../utils/emailTemplates';
+import { config } from '../../config';
+import { logger } from '../../utils/logger';
 import {
     AcceptContactLinkRequestDto,
     CreateContactLinkRequestDto,
@@ -97,12 +101,39 @@ export class ContactLinksService {
             select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
         });
 
+        if (user && user.id === requesterUserId) {
+            /*
+             * Their own address — the account behind every workspace they own.
+             *
+             * Connecting to yourself has no meaning: acceptance would have to
+             * come from a workspace of the same person, and the canonical-pair
+             * check would refuse the link anyway. Answering plainly here is
+             * kinder than letting them send a request that can never be
+             * accepted.
+             */
+            return { found: true as const, isSelf: true as const };
+        }
+
         if (!user || !user.isActive) {
-            // Not an error: "nobody here" is a normal, actionable answer that
-            // sends the caller down the manual-entry path instead.
+            // Not an error: "nobody here" is a normal, actionable answer. It
+            // sends the caller to the two things still open to them — invite
+            // the address anyway, or type the details in by hand.
+            const [pendingInvite, suggestedContact] = await Promise.all([
+                this.prisma.contactLinkRequest.findFirst({
+                    where: {
+                        requesterWorkspaceId: workspaceId,
+                        recipientEmail: normalized,
+                        status: ContactLinkRequestStatus.PENDING,
+                    },
+                    select: { id: true, createdAt: true },
+                }),
+                this.findContactByEmail(workspaceId, normalized),
+            ]);
+
             return {
                 found: false as const,
-                suggestedContact: await this.findContactByEmail(workspaceId, normalized),
+                pendingRequest: pendingInvite,
+                suggestedContact,
             };
         }
 
@@ -110,7 +141,9 @@ export class ContactLinksService {
             this.prisma.contactLinkRequest.findFirst({
                 where: {
                     requesterWorkspaceId: workspaceId,
-                    recipientUserId: user.id,
+                    // Keyed on the address, not the account: an invite sent
+                    // before they signed up is still the same request.
+                    recipientEmail: normalized,
                     status: ContactLinkRequestStatus.PENDING,
                 },
                 select: { id: true, createdAt: true },
@@ -121,6 +154,7 @@ export class ContactLinksService {
 
         return {
             found: true as const,
+            isSelf: false as const,
             user: {
                 id: user.id,
                 firstName: user.firstName,
@@ -143,17 +177,38 @@ export class ContactLinksService {
     ) {
         const normalized = dto.email.trim().toLowerCase();
 
+        // An invite does not require an account. Someone who has never heard
+        // of the app is exactly who this reaches: the request is filed against
+        // their address, emailed to them, and waits. Signing up later is what
+        // hands it to them to accept or decline, like any other.
         const recipient = await this.prisma.user.findUnique({
             where: { email: normalized },
             select: { id: true, firstName: true, isActive: true },
         });
-        if (!recipient || !recipient.isActive) {
+
+        // A deactivated account is a dead end — the address cannot be invited
+        // to sign up either, because it is already taken.
+        if (recipient && !recipient.isActive) {
             throw new NotFoundError('No active user found with that email');
         }
 
-        const existingLink = await this.findActiveLinkWithUser(workspaceId, recipient.id);
-        if (existingLink) {
-            throw new ConflictError('You are already connected to this person');
+        // Their own address. Checked here and not only in the UI: a request to
+        // yourself could never be accepted (the workspace pair would be the
+        // same person's, and a link needs two distinct workspaces), so it
+        // would sit pending forever rather than fail honestly.
+        if (recipient && recipient.id === requesterUserId) {
+            throw new AppError(
+                'That is your own account. You cannot invite yourself as a contact.',
+                400,
+                'SELF_REQUEST',
+            );
+        }
+
+        if (recipient) {
+            const existingLink = await this.findActiveLinkWithUser(workspaceId, recipient.id);
+            if (existingLink) {
+                throw new ConflictError('You are already connected to this person');
+            }
         }
 
         // Resolve what this connection should attach to, so an org that was
@@ -173,17 +228,18 @@ export class ContactLinksService {
                     requesterWorkspaceId: workspaceId,
                     requestedType: dto.requestedType as ContactType,
                     requesterContactId: targetContact?.id ?? null,
-                    recipientUserId: recipient.id,
+                    recipientEmail: normalized,
+                    recipientUserId: recipient?.id ?? null,
                     message: dto.message,
                     expiresAt,
                 },
             });
         } catch (error) {
             // The partial unique index on (requester_workspace_id,
-            // recipient_user_id) WHERE status = 'PENDING' is what actually
-            // stops a double-send; this only turns it into a sentence.
+            // recipient_email) WHERE status = 'PENDING' is what actually stops
+            // a double-send; this only turns it into a sentence.
             if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-                throw new ConflictError('You already have a pending request to this person');
+                throw new ConflictError('You already have a pending request to this address');
             }
             throw error;
         }
@@ -201,9 +257,29 @@ export class ContactLinksService {
                 action: AuditAction.CONTACT_LINK_REQUESTED,
                 resource: 'contact_link_request',
                 resourceId: request.id,
-                details: { recipientUserId: recipient.id, requestedType: dto.requestedType } as any,
+                details: {
+                    recipientEmail: normalized,
+                    recipientUserId: recipient?.id ?? null,
+                    requestedType: dto.requestedType,
+                } as any,
             },
         });
+
+        if (!recipient) {
+            // Nothing to notify in-app — they have no account to notify into.
+            // The email is the whole delivery mechanism for this case.
+            sendEmail({
+                to: normalized,
+                subject: `${senderName} wants to add you as a contact on ${config.APP_NAME}`,
+                html: contactInviteSignupEmailTemplate({
+                    senderName,
+                    message: dto.message?.trim() || null,
+                    signupUrl: `${config.APP_URL.replace(/\/+$/, '')}/signup?email=${encodeURIComponent(normalized)}`,
+                }),
+            }).catch((err) => logger.error('Failed to send contact invite email', { to: normalized, err }));
+
+            return request;
+        }
 
         this.notify({
             userId: recipient.id,
@@ -805,4 +881,35 @@ function buildBillingAddress(profile: ProfileLike) {
         country: profile.country,
     };
     return Object.values(parts).some(Boolean) ? parts : null;
+}
+
+/**
+ * Hand a brand-new account the contact invites already waiting for its address.
+ *
+ * Someone can be invited before they have ever heard of the app: the request is
+ * filed against their email and sits there. This is the moment it becomes
+ * theirs — the row gains a `recipientUserId`, which is what puts it in their
+ * inbox to accept or decline exactly like a request from an existing user.
+ *
+ * Expired invites are deliberately left alone: `getIncoming` filters them out,
+ * and rewriting them here would only obscure that they were never answered.
+ *
+ * Runs inside the signup transaction. A failure here would roll back the
+ * account itself, which is why it does nothing that can fail on bad data —
+ * only a scoped update of rows already keyed on this exact address.
+ */
+export async function claimPendingContactInvites(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    email: string,
+): Promise<number> {
+    const { count } = await tx.contactLinkRequest.updateMany({
+        where: {
+            recipientEmail: email.trim().toLowerCase(),
+            recipientUserId: null,
+            status: ContactLinkRequestStatus.PENDING,
+        },
+        data: { recipientUserId: userId },
+    });
+    return count;
 }

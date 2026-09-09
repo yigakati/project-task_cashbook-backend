@@ -5,7 +5,11 @@ import { authenticate } from '../../middlewares/authenticate';
 import { requireSuperAdmin } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { uuidParams } from '../../middlewares/uuidParam';
-import { setWorkspaceFeatureSchema } from './platform.dto';
+import {
+    setWorkspaceFeatureSchema,
+    setReferralAgentSchema,
+    updatePlatformSettingsSchema,
+} from './platform.dto';
 
 const router = Router();
 const controller = container.resolve(PlatformController);
@@ -27,6 +31,34 @@ router.patch(
     validate(uuidParams('workspaceId'), 'params'),
     validate(setWorkspaceFeatureSchema),
     controller.setWorkspaceFeature.bind(controller) as any,
+);
+
+// ─── Platform-wide settings ────────────────────────────
+//
+// Applies to every workspace at once, unlike the per-organisation feature
+// grants above.
+router.get('/settings', controller.getSettings.bind(controller) as any);
+router.patch(
+    '/settings',
+    validate(updatePlatformSettingsSchema),
+    controller.updateSettings.bind(controller) as any,
+);
+
+// ─── Referral agents ───────────────────────────────────
+//
+// Appointing is a platform act, not a workspace one: an agent brings people to
+// the product, not to any one organisation.
+router.get('/referral-agents', controller.listReferralAgents.bind(controller) as any);
+router.get(
+    '/referral-agents/:agentId/referrals',
+    validate(uuidParams('agentId'), 'params'),
+    controller.listAgentReferrals.bind(controller) as any,
+);
+router.patch(
+    '/users/:userId/referral-agent',
+    validate(uuidParams('userId'), 'params'),
+    validate(setReferralAgentSchema),
+    controller.setReferralAgent.bind(controller) as any,
 );
 
 router.get('/audit-logs', controller.listAuditLogs.bind(controller) as any);

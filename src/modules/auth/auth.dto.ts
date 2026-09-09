@@ -14,6 +14,18 @@ export const registerSchema = z.object({
     /** ISO 3166-1 alpha-2 (e.g. UG, KE, US) — decides the currency the
      *  personal workspace (and its seeded wallets) is born in. */
     country: z.string().trim().length(2, 'Use the 2-letter country code').optional(),
+    /**
+     * Credits this signup to a referral agent. Optional and forgiving by
+     * design: an unknown or revoked code is ignored rather than refused, since
+     * a mistyped code is no reason to turn away an account.
+     */
+    referralCode: z.string().trim().max(32).optional(),
+    /**
+     * Whether the code arrived via the agent's share link or was typed in.
+     * Recorded so it is visible whether link attribution is actually
+     * surviving the signup round trip, rather than guessed at later.
+     */
+    referralSource: z.enum(['LINK', 'CODE']).optional(),
 });
 
 export const loginSchema = z.object({
@@ -80,6 +92,9 @@ export const resetPasswordSchema = z.object({
 
 export const googleLoginSchema = z.object({
     idToken: z.string().min(1, 'Google ID token is required'),
+    /** Only consulted when this call creates a new account. */
+    referralCode: z.string().trim().max(32).optional(),
+    referralSource: z.enum(['LINK', 'CODE']).optional(),
 });
 
 /**
@@ -91,6 +106,9 @@ export const googleLoginSchema = z.object({
  */
 export const ocLoginSchema = z.object({
     code: z.string().min(1, 'Authorization code is required'),
+    /** Only consulted when this call creates a new account. */
+    referralCode: z.string().trim().max(32).optional(),
+    referralSource: z.enum(['LINK', 'CODE']).optional(),
 });
 
 export type RegisterDto = z.infer<typeof registerSchema>;

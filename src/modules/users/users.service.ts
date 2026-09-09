@@ -1,18 +1,37 @@
-import { injectable } from 'tsyringe';
+import { injectable, inject } from 'tsyringe';
+import { PrismaClient } from '@prisma/client';
 import { UsersRepository } from './users.repository';
 import { NotFoundError } from '../../core/errors/AppError';
 import { UpdateProfileDto } from './users.dto';
+import {
+    isPlatformSettingEnabled,
+    PLATFORM_SETTINGS,
+} from '../platform/platform-settings.service';
 
 @injectable()
 export class UsersService {
-    constructor(private usersRepository: UsersRepository) { }
+    constructor(
+        private usersRepository: UsersRepository,
+        @inject('PrismaClient') private prisma: PrismaClient,
+    ) { }
 
     async getProfile(userId: string) {
         const user = await this.usersRepository.findById(userId);
         if (!user) {
             throw new NotFoundError('User');
         }
-        return this.toProfileResponse(user);
+
+        // Platform-wide switches the client needs in order to show the right
+        // actions. Carried on the profile it already loads, so gating a button
+        // costs no extra request — and the endpoints enforce them regardless.
+        const manualContactsEnabled = await isPlatformSettingEnabled(
+            this.prisma, PLATFORM_SETTINGS.MANUAL_CONTACTS,
+        );
+
+        return {
+            ...this.toProfileResponse(user),
+            platform: { manualContactsEnabled },
+        };
     }
 
     async updateProfile(userId: string, dto: UpdateProfileDto) {

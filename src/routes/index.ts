@@ -11,6 +11,7 @@ import {
     contactLinksWorkspaceRouter,
     contactLinksRouter,
 } from '../modules/contact-links/contact-links.routes';
+import referralsRoutes from '../modules/referrals/referrals.routes';
 import paymentModesRoutes from '../modules/payment-modes/payment-modes.routes';
 import filesRoutes from '../modules/files/files.routes';
 import reportsRoutes from '../modules/reports/reports.routes';
@@ -89,6 +90,7 @@ router.use('/categories', categoriesRoutes);
 router.use('/contacts', contactsRoutes);
 router.use('/workspaces/:workspaceId/contact-links', contactLinksWorkspaceRouter);
 router.use('/contact-links', contactLinksRouter);
+router.use('/workspaces/:workspaceId/referrals', referralsRoutes);
 router.use('/payment-modes', paymentModesRoutes);
 router.use('/files', filesRoutes);
 router.use('/reports', reportsRoutes);

@@ -9,11 +9,16 @@
  * itself is stopped before it shares nothing.
  */
 import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { resetDatabase, testPrisma } from '../setup';
 import { resolveService } from '../container';
 import { createUser, createWorkspace } from '../factories';
-import { ContactLinksService, inverseContactType } from '../../modules/contact-links/contact-links.service';
+import {
+    ContactLinksService,
+    inverseContactType,
+    claimPendingContactInvites,
+} from '../../modules/contact-links/contact-links.service';
 import { WorkspaceProfileService } from '../../modules/workspace-profile/workspace-profile.service';
 
 const contactLinks = () => resolveService(ContactLinksService);
@@ -468,5 +473,117 @@ describe('contact connections — looking someone up', () => {
 
         const after = await contactLinks().lookupRecipient(myWs.id, meUser.id, themUser.email);
         expect(after.pendingRequest).not.toBeNull();
+    });
+});
+
+describe('contact connections — inviting someone with no account yet', () => {
+    beforeEach(resetDatabase);
+
+    it('files the request against the address, then hands it over at signup', async () => {
+        const inviter = await createUser({ email: `inv-${randomUUID()}@test.local` });
+        const inviterWs = await workspaceWithProfile(inviter.id, {
+            displayName: 'Inviter Ltd', email: 'hello@inviter.test',
+        });
+
+        const strangerEmail = `stranger-${randomUUID()}@test.local`;
+
+        // Nobody by that name — and that is an answer, not an error.
+        const lookup = await contactLinks().lookupRecipient(inviterWs.id, inviter.id, strangerEmail);
+        expect(lookup.found).toBe(false);
+
+        const request = await contactLinks().createRequest(inviterWs.id, inviter.id, {
+            email: strangerEmail,
+            requestedType: 'CUSTOMER',
+        });
+        expect(request.recipientUserId).toBeNull();
+        expect(request.recipientEmail).toBe(strangerEmail);
+
+        // Nothing is waiting for them yet, because there is no "them".
+        expect(await contactLinks().getIncoming(inviter.id, {})).toHaveLength(0);
+
+        // The address signs up. Registration is what hands the request over.
+        const arrived = await createUser({ email: strangerEmail });
+        const claimed = await testPrisma.$transaction((tx: Prisma.TransactionClient) =>
+            claimPendingContactInvites(tx, arrived.id, arrived.email),
+        );
+        expect(claimed).toBe(1);
+
+        // It is now an ordinary request in their inbox.
+        const inbox = await contactLinks().getIncoming(arrived.id, {});
+        expect(inbox).toHaveLength(1);
+        expect(inbox[0]!.id).toBe(request.id);
+
+        // And accepting works exactly as it does for an existing user.
+        const theirWs = await workspaceWithProfile(arrived.id, {
+            displayName: 'Stranger Co', email: arrived.email,
+        });
+        const { requesterContact } = await contactLinks().acceptRequest(request.id, arrived.id, {
+            workspaceId: theirWs.id,
+        });
+        expect(requesterContact.name).toBe('Stranger Co');
+    });
+
+    it('refuses a second invite to the same address while one is in flight', async () => {
+        const inviter = await createUser({ email: `inv2-${randomUUID()}@test.local` });
+        const ws = await workspaceWithProfile(inviter.id, {
+            displayName: 'Inviter Two', email: 'two@inviter.test',
+        });
+        const strangerEmail = `stranger2-${randomUUID()}@test.local`;
+
+        await contactLinks().createRequest(ws.id, inviter.id, {
+            email: strangerEmail, requestedType: 'CUSTOMER',
+        });
+
+        await expect(
+            contactLinks().createRequest(ws.id, inviter.id, {
+                email: strangerEmail, requestedType: 'CUSTOMER',
+            }),
+        ).rejects.toMatchObject({ statusCode: 409 });
+    });
+});
+
+describe('contact connections — your own address', () => {
+    beforeEach(resetDatabase);
+
+    it('reports the caller as themselves rather than offering to connect', async () => {
+        const me = await createUser({ email: `self-${randomUUID()}@test.local` });
+        const myWs = await workspaceWithProfile(me.id, {
+            displayName: 'My Business', email: 'biz@self.test',
+        });
+
+        const lookup = await contactLinks().lookupRecipient(myWs.id, me.id, me.email);
+        expect(lookup).toMatchObject({ found: true, isSelf: true });
+        // Nothing about another account is returned, because there isn't one.
+        expect((lookup as any).user).toBeUndefined();
+    });
+
+    it('refuses a request to itself even when the endpoint is called directly', async () => {
+        const me = await createUser({ email: `self2-${randomUUID()}@test.local` });
+        const myWs = await workspaceWithProfile(me.id, {
+            displayName: 'My Other Business', email: 'other@self.test',
+        });
+
+        await expect(
+            contactLinks().createRequest(myWs.id, me.id, {
+                email: me.email,
+                requestedType: 'CUSTOMER',
+            }),
+        ).rejects.toMatchObject({ code: 'SELF_REQUEST' });
+
+        expect(await testPrisma.contactLinkRequest.count()).toBe(0);
+    });
+
+    it('matches the address however it is capitalised', async () => {
+        const me = await createUser({ email: `self3-${randomUUID()}@test.local` });
+        const myWs = await workspaceWithProfile(me.id, {
+            displayName: 'Caps Test', email: 'caps@self.test',
+        });
+
+        await expect(
+            contactLinks().createRequest(myWs.id, me.id, {
+                email: me.email.toUpperCase(),
+                requestedType: 'CUSTOMER',
+            }),
+        ).rejects.toMatchObject({ code: 'SELF_REQUEST' });
     });
 });

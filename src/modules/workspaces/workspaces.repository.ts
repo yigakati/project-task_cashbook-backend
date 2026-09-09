@@ -36,6 +36,10 @@ export class WorkspacesRepository {
                     owner: {
                         select: { id: true, email: true, firstName: true, lastName: true },
                     },
+                    // What a superadmin has unlocked here. Carried on the
+                    // workspace the client already loads, so hiding an action
+                    // it was never granted costs no extra request.
+                    features: { select: { feature: true, enabledAt: true } },
                     _count: { select: { members: true, cashbooks: true } },
                 },
             }),
@@ -47,6 +51,7 @@ export class WorkspacesRepository {
                             owner: {
                                 select: { id: true, email: true, firstName: true, lastName: true },
                             },
+                            features: { select: { feature: true, enabledAt: true } },
                             _count: { select: { members: true, cashbooks: true } },
                         },
                     },

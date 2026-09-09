@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient, Prisma, ReferralSource } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -20,6 +20,8 @@ import {
     GoogleLoginDto,
     OcLoginDto,
 } from './auth.dto';
+import { attributeReferral, markReferralVerified } from '../referrals/referrals.helpers';
+import { claimPendingContactInvites } from '../contact-links/contact-links.service';
 import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
@@ -94,6 +96,20 @@ export class AuthService {
                     userAgent,
                 },
             });
+
+            await attributeReferral(tx, {
+                rawCode: dto.referralCode,
+                userId: user.id,
+                signupMethod: AuthProvider.LOCAL,
+                // A code that reached a form field could have come from either
+                // route; the client says which, and says CODE when unsure.
+                source: dto.referralSource === 'LINK' ? ReferralSource.LINK : ReferralSource.CODE,
+                // The OTP below is still outstanding, so this address is not
+                // proven yet. verifyEmail promotes the referral when it is.
+                emailVerified: false,
+            });
+
+            await claimPendingContactInvites(tx, user.id, user.email);
 
             return user;
         });
@@ -295,6 +311,9 @@ export class AuthService {
             lastName: string;
             linkedAction: AuditAction;
             createdAction: AuditAction;
+            /** Consulted only if this call ends up creating the account. */
+            referralCode?: string;
+            referralSource?: 'LINK' | 'CODE';
             ipAddress?: string;
             userAgent?: string;
         },
@@ -390,6 +409,22 @@ export class AuthService {
                 userAgent,
             },
         });
+
+        // Only a brand-new account can be referred. Cases A and B are people
+        // who were already here, so a code arriving with their sign-in is
+        // ignored rather than retro-crediting an agent for an existing user.
+        await attributeReferral(tx, {
+            rawCode: params.referralCode,
+            userId: newUser.id,
+            signupMethod: provider,
+            source: params.referralSource === 'CODE' ? ReferralSource.CODE : ReferralSource.LINK,
+            // The account above is created verified because Google/OC already
+            // proved the address. There is no later step here, so the referral
+            // has to be recorded as verified now or it never would be.
+            emailVerified: true,
+        });
+
+        await claimPendingContactInvites(tx, newUser.id, newUser.email);
 
         return { user: newUser, isNewUser: true };
     }
@@ -536,6 +571,8 @@ export class AuthService {
                 lastName,
                 linkedAction: AuditAction.OC_ACCOUNT_LINKED,
                 createdAction: AuditAction.OC_ACCOUNT_CREATED,
+                referralCode: dto.referralCode,
+                referralSource: dto.referralSource,
                 ipAddress,
                 userAgent,
             }),
@@ -763,6 +800,10 @@ export class AuthService {
             where: { id: user.id },
             data: { emailVerified: true },
         });
+
+        // A verified address is what separates a real referral from a typo,
+        // so this is the moment the agent's count becomes trustworthy.
+        await markReferralVerified(this.prisma, user.id);
 
         await redis.del(`verification:${user.id}`);
 
@@ -998,6 +1039,8 @@ export class AuthService {
                 lastName,
                 linkedAction: AuditAction.GOOGLE_ACCOUNT_LINKED,
                 createdAction: AuditAction.GOOGLE_ACCOUNT_CREATED,
+                referralCode: dto.referralCode,
+                referralSource: dto.referralSource,
                 ipAddress,
                 userAgent,
             }),

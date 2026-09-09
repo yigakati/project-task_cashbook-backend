@@ -438,3 +438,38 @@ export function receiptEmailTemplate(params: {
     </html>`;
 }
 
+
+/**
+ * Inviting someone who has no account yet to become a contact.
+ *
+ * Unlike the in-app request, this is the entire delivery mechanism — there is
+ * no inbox to land in — so it has to carry enough context for a cold recipient
+ * to know who is asking and why, and it links to signup rather than login.
+ */
+export function contactInviteSignupEmailTemplate(params: {
+    senderName: string;
+    message: string | null;
+    signupUrl: string;
+}): string {
+    const { senderName, message, signupUrl } = params;
+    return `
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;">
+        <h2 style="color: #111827; margin-bottom: 8px;">${senderName} wants to add you as a contact</h2>
+        <p style="color: #6b7280; font-size: 15px; line-height: 1.6;">
+            <strong>${senderName}</strong> uses <strong>${config.APP_NAME}</strong> to keep
+            track of who they do business with, and would like to record you as a contact.
+        </p>
+        ${message ? `<blockquote style="margin: 20px 0; padding: 12px 16px; border-left: 3px solid #e5e7eb; color: #4b5563; font-size: 14px; font-style: italic;">${message}</blockquote>` : ''}
+        <p style="color: #6b7280; font-size: 15px; line-height: 1.6;">
+            Create a free account and the request will be waiting for you. You choose
+            which of your businesses to share, what to share, and you can decline.
+        </p>
+        <div style="text-align: center; margin: 28px 0;">
+            <a href="${signupUrl}" style="display: inline-block; padding: 12px 32px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;">Create an account</a>
+        </div>
+        <p style="color: #9ca3af; font-size: 13px;">
+            If you do not know ${senderName}, you can ignore this email — nothing is shared
+            unless you accept.
+        </p>
+    </div>`;
+}

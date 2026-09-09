@@ -24,6 +24,22 @@ export async function createUser(overrides: { email?: string } = {}) {
     });
 }
 
+/**
+ * Switch manual contact entry on for the whole platform.
+ *
+ * It is a platform-wide switch rather than a per-workspace grant, so any test
+ * that builds a contact through ContactsService needs this first. Deliberately
+ * NOT on by default: the tests that assert the switch refuses would be
+ * silently disarmed by a permissive default.
+ */
+export async function enableManualContacts() {
+    return testPrisma.platformSetting.upsert({
+        where: { key: 'manual_contacts_enabled' },
+        update: { value: true },
+        create: { key: 'manual_contacts_enabled', value: true },
+    });
+}
+
 export async function createWorkspace(
     ownerId: string,
     overrides: {

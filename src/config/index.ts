@@ -90,6 +90,16 @@ const envSchema = z.object({
      */
     OC_REDIRECT_URI: z.string().url().default('https://inchange.odixtec.net/auth/callback'),
 
+    /**
+     * Where the frontend lives, for links that land in someone's inbox — a
+     * referral share link, a contact invite.
+     *
+     * A single URL on purpose: CORS_ORIGINS is a comma-separated list, so
+     * using it as an href (as some older templates do) renders every origin
+     * joined together into one broken link.
+     */
+    APP_URL: z.string().url().default('https://inchange.odixtec.net'),
+
     CF_R2_ACCOUNT_ID: z.string().min(1, 'CF_R2_ACCOUNT_ID is required').default('dummy_account_id'),
     CF_R2_ACCESS_KEY_ID: z.string().min(1, 'CF_R2_ACCESS_KEY_ID is required').default('dummy_key_id'),
     CF_R2_SECRET_ACCESS_KEY: z.string().min(1, 'CF_R2_SECRET_ACCESS_KEY is required').default('dummy_secret'),
