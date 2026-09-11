@@ -238,7 +238,10 @@ export function requireBusinessWorkspace() {
  * service, following the same split the tasks module documents: routes gate the
  * module, services gate the row.
  */
-export function requireTicketing(requiredPermission?: WorkspacePermission) {
+export function requireTicketing(
+    requiredPermission?: WorkspacePermission,
+    options: { reportDisabled?: boolean } = {},
+) {
     return async (req: AuthenticatedRequest, _res: Response, next: NextFunction): Promise<void> => {
         try {
             const workspaceId = req.params.workspaceId as string;
@@ -257,7 +260,11 @@ export function requireTicketing(requiredPermission?: WorkspacePermission) {
             }
 
             const enabled = await isTicketingEnabled(prisma, workspaceId);
-            if (!enabled) {
+            // Hidden as a 404 everywhere except where the caller is asking
+            // precisely "is it on here?" — the /access route. Membership is
+            // still checked below either way, so that answer is never given
+            // about a workspace the caller does not belong to.
+            if (!enabled && !options.reportDisabled) {
                 throw new NotFoundError('Ticketing');
             }
 
@@ -286,7 +293,10 @@ export function requireTicketing(requiredPermission?: WorkspacePermission) {
                 staffTag = (membership.staffTag as StaffTag | null) ?? null;
             }
 
-            const capabilities = ticketDeskCapabilities(userRole, staffTag);
+            // No module, no desk: nothing to hold capabilities at.
+            const capabilities = enabled
+                ? ticketDeskCapabilities(userRole, staffTag)
+                : new Set<WorkspacePermission>();
 
             if (requiredPermission && !capabilities.has(requiredPermission)) {
                 await logPermissionDenied(userId, requiredPermission, 'ticketing', workspaceId, {
@@ -302,6 +312,7 @@ export function requireTicketing(requiredPermission?: WorkspacePermission) {
             (req as any).workspaceRole = userRole;
             (req as any).staffTag = staffTag;
             (req as any).ticketCapabilities = capabilities;
+            (req as any).ticketingEnabled = enabled;
             next();
         } catch (error) {
             next(error);

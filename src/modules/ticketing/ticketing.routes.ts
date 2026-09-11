@@ -59,9 +59,12 @@ router.use(authenticate as any);
 
 // ─── Desk ─────────────────────────────────────────────
 
+// Answers "is ticketing on here, and what may I do?" — so "no" is an answer,
+// not a missing resource. Every other ticketing route still 404s when the
+// module is off; this one reports it, after the same membership check.
 router.get(
     '/access',
-    requireTicketing() as any,
+    requireTicketing(undefined, { reportDisabled: true }) as any,
     controller.getAccess.bind(controller) as any,
 );
 

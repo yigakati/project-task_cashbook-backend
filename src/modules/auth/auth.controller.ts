@@ -4,6 +4,7 @@ import { StatusCodes } from 'http-status-codes';
 import { AuthService } from './auth.service';
 import { AuthenticatedRequest, ApiResponse } from '../../core/types';
 import { config } from '../../config';
+import { accessTokenTtlMs, refreshTokenTtlMs } from '../../core/auth/token-lifetimes';
 
 @injectable()
 export class AuthController {
@@ -305,34 +306,60 @@ export class AuthController {
 }
 
 // ─── Cookie Helpers ────────────────────────────────────
-function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
-    const cookieOptions = {
-        httpOnly: true,
+
+/**
+ * A readable companion to the httpOnly access cookie, carrying only its expiry
+ * time (epoch ms).
+ *
+ * The client cannot read the access cookie — that is the point of httpOnly —
+ * so until now the only way it learned the token had lapsed was a request
+ * bouncing with a 401, then a refresh, then a replay. Every poller did that
+ * once per expiry window: a 401 in the browser while the server logs a 200 or
+ * 304, because what the server sees last is the successful replay. Knowing
+ * the expiry lets the client refresh just before it, so no request goes out
+ * with a token already known to be dead.
+ *
+ * A timestamp is not a credential. It outlives the access cookie on purpose
+ * (refresh-token lifetime), so an expired session reads as "expired at X"
+ * rather than as "never logged in".
+ */
+const ACCESS_EXPIRY_COOKIE = 'accessTokenExpiresAt';
+
+function baseCookieOptions() {
+    return {
         secure: config.COOKIE_SECURE,
         sameSite: config.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none',
         domain: config.COOKIE_DOMAIN,
     };
+}
 
-    res.cookie('accessToken', accessToken, {
-        ...cookieOptions,
-        maxAge: 15 * 60 * 1000, // 15 minutes
-    });
+function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
+    const base = baseCookieOptions();
+    // Both lifetimes come from the same config the tokens are signed with, so
+    // a cookie can never outlive — or die before — the token it carries.
+    const accessTtl = accessTokenTtlMs();
+    const refreshTtl = refreshTokenTtlMs();
+
+    res.cookie('accessToken', accessToken, { ...base, httpOnly: true, maxAge: accessTtl });
 
     res.cookie('refreshToken', refreshToken, {
-        ...cookieOptions,
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        ...base,
+        httpOnly: true,
+        maxAge: refreshTtl,
         path: '/api/v1/auth', // Only sent to auth routes
+    });
+
+    res.cookie(ACCESS_EXPIRY_COOKIE, String(Date.now() + accessTtl), {
+        ...base,
+        httpOnly: false,
+        maxAge: refreshTtl,
+        path: '/',
     });
 }
 
 function clearAuthCookies(res: Response): void {
-    const cookieOptions = {
-        httpOnly: true,
-        secure: config.COOKIE_SECURE,
-        sameSite: config.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none',
-        domain: config.COOKIE_DOMAIN,
-    };
-
-    res.clearCookie('accessToken', cookieOptions);
-    res.clearCookie('refreshToken', { ...cookieOptions, path: '/api/v1/auth' });
+    const base = baseCookieOptions();
+    res.clearCookie('accessToken', { ...base, httpOnly: true });
+    res.clearCookie('refreshToken', { ...base, httpOnly: true, path: '/api/v1/auth' });
+    res.clearCookie(ACCESS_EXPIRY_COOKIE, { ...base, path: '/' });
 }

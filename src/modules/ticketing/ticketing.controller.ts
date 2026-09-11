@@ -43,7 +43,8 @@ export class TicketingController {
 
     async getAccess(req: AuthenticatedRequest, res: Response, next: NextFunction) {
         try {
-            ok(res, 'Ticketing access', await this.ticketing.getAccess(wsId(req), actorOf(req)));
+            const enabled = (req as any).ticketingEnabled !== false;
+            ok(res, 'Ticketing access', await this.ticketing.getAccess(wsId(req), actorOf(req), enabled));
         } catch (error) { next(error); }
     }
 

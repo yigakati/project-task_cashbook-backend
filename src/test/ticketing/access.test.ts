@@ -341,3 +341,36 @@ describe('who may put somebody on the ticket desk', () => {
         expect(row.staffTag).toBe('SUPERVISOR');
     });
 });
+
+describe('the access endpoint answers rather than hides', () => {
+    beforeEach(resetDatabase);
+
+    it('reports a workspace without the module as disabled, with a 200', async () => {
+        const owner = await createUser();
+        const workspace = await createWorkspace(owner.id);
+
+        const response = await request(app)
+            .get(`/api/v1/workspaces/${workspace.id}/ticketing/access`)
+            .set('Cookie', await cookieFor(owner.id, owner.email));
+
+        // "No" is the answer this endpoint exists to give. As a 404 it was
+        // logged as a failed request in every member's browser, on every page,
+        // for the ordinary case of an organisation without ticketing.
+        expect(response.status).toBe(200);
+        expect(response.body.data).toMatchObject({ enabled: false, capabilities: [] });
+    });
+
+    it('still refuses someone outside the workspace', async () => {
+        const owner = await createUser();
+        const outsider = await createUser();
+        const workspace = await createWorkspace(owner.id);
+
+        const response = await request(app)
+            .get(`/api/v1/workspaces/${workspace.id}/ticketing/access`)
+            .set('Cookie', await cookieFor(outsider.id, outsider.email));
+
+        // Answering "disabled" must not become a way to probe workspaces the
+        // caller has nothing to do with.
+        expect(response.status).toBe(403);
+    });
+});

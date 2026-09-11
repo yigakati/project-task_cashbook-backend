@@ -67,6 +67,22 @@ export class AuthRepository {
         });
     }
 
+    /**
+     * Spend a refresh token, atomically.
+     *
+     * Returns false when it was already spent. Two refreshes presenting the
+     * same cookie at once — two tabs, or a timer and a 401 in the same tab —
+     * both read it as valid a moment earlier; the status filter in the where
+     * clause is what lets only one of them win.
+     */
+    async claimRefreshToken(id: string): Promise<boolean> {
+        const { count } = await this.prisma.refreshToken.updateMany({
+            where: { id, isRevoked: false },
+            data: { isRevoked: true },
+        });
+        return count === 1;
+    }
+
     async revokeAllUserTokens(userId: string) {
         return this.prisma.refreshToken.updateMany({
             where: { userId, isRevoked: false },

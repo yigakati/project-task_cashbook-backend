@@ -21,6 +21,7 @@ import {
     OcLoginDto,
 } from './auth.dto';
 import { attributeReferral, markReferralVerified } from '../referrals/referrals.helpers';
+import { parseDurationToSeconds } from '../../core/auth/token-lifetimes';
 import { claimPendingContactInvites } from '../contact-links/contact-links.service';
 import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
@@ -639,8 +640,13 @@ export class AuthService {
             throw new AuthenticationError('Account is deactivated');
         }
 
-        // Revoke old token (rotation)
-        await this.authRepository.revokeRefreshToken(storedToken.id);
+        // Spend the old token (rotation), atomically. Two refreshes presenting
+        // the same cookie at once both passed the lookup above; only one may
+        // spend it, or the token family forks into two live descendants.
+        const claimed = await this.authRepository.claimRefreshToken(storedToken.id);
+        if (!claimed) {
+            throw new AuthenticationError('Invalid or expired refresh token');
+        }
 
         // Generate new tokens
         const accessToken = this.generateAccessToken(storedToken.user);
@@ -955,22 +961,9 @@ export class AuthService {
     }
 
     private parseExpiryToSeconds(expiry: string): number {
-        const match = expiry.match(/^(\d+)([smhd])$/);
-        if (!match) {
-            return 7 * 24 * 60 * 60; // default 7 days in seconds
-        }
-
-        const value = parseInt(match[1]);
-        const unit = match[2];
-
-        const multipliers: Record<string, number> = {
-            s: 1,
-            m: 60,
-            h: 60 * 60,
-            d: 24 * 60 * 60,
-        };
-
-        return value * multipliers[unit];
+        // The same parser the auth cookies use, so a token and its cookie
+        // always agree on how long "7d" is.
+        return parseDurationToSeconds(expiry, 7 * 24 * 60 * 60);
     }
 
     // ─── OTP Helpers ──────────────────────────────────

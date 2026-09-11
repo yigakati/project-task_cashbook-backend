@@ -80,14 +80,27 @@ export class TicketingService {
      * more than can be kept in step, and the one that drifts is always the one
      * that decides what a user sees.
      */
-    async getAccess(workspaceId: string, actor: DeskActor) {
+    async getAccess(workspaceId: string, actor: DeskActor, enabled = true) {
+        if (!enabled) {
+            // The module is not unlocked for this organisation — the normal
+            // answer for most workspaces, so it is returned as data rather
+            // than as an error the browser logs on every page load.
+            return {
+                enabled: false,
+                configured: false,
+                role: actor.role,
+                staffTag: actor.staffTag,
+                capabilities: [...actor.capabilities],
+            };
+        }
+
         const settings = await this.prisma.ticketSettings.findUnique({
             where: { workspaceId },
             select: { isConfigured: true },
         });
 
         return {
-            enabled: true,   // the guard already refused if it were not
+            enabled: true,
             configured: settings?.isConfigured ?? false,
             role: actor.role,
             staffTag: actor.staffTag,
