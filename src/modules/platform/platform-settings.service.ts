@@ -2,6 +2,12 @@ import { injectable, inject } from 'tsyringe';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { AppError } from '../../core/errors/AppError';
 import { AuditAction } from '../../core/types';
+import {
+    DEFAULT_QUOTA_SETTING_KEY,
+    MAX_STORAGE_QUOTA_BYTES,
+    getDefaultQuotaBytes,
+} from '../storage/storage-quota.service';
+import { formatBytes } from '../../utils/format-bytes';
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -58,6 +64,8 @@ export class PlatformSettingsService {
 
         return {
             manualContactsEnabled: byKey.get(PLATFORM_SETTINGS.MANUAL_CONTACTS) === true,
+            /** What every workspace gets unless it has its own allowance. */
+            defaultStorageQuotaBytes: await getDefaultQuotaBytes(this.prisma),
             updatedAt: rows.reduce<Date | null>(
                 (latest, r) => (!latest || r.updatedAt > latest ? r.updatedAt : latest),
                 null,
@@ -88,6 +96,32 @@ export class PlatformSettingsService {
             },
         });
 
+        return this.getAll();
+    }
+
+    /** Change the storage every workspace without its own allowance gets. */
+    async setDefaultStorageQuota(bytes: number, actorId: string) {
+        if (!Number.isFinite(bytes) || bytes <= 0 || bytes > MAX_STORAGE_QUOTA_BYTES) {
+            throw new AppError(
+                `The default must be between 1 byte and ${formatBytes(MAX_STORAGE_QUOTA_BYTES)}.`,
+                400,
+                'INVALID_DEFAULT_QUOTA',
+            );
+        }
+        await this.prisma.platformSetting.upsert({
+            where: { key: DEFAULT_QUOTA_SETTING_KEY },
+            update: { value: bytes, updatedById: actorId },
+            create: { key: DEFAULT_QUOTA_SETTING_KEY, value: bytes, updatedById: actorId },
+        });
+        await this.prisma.auditLog.create({
+            data: {
+                userId: actorId,
+                action: AuditAction.STORAGE_DEFAULT_QUOTA_SET,
+                resource: 'platform_setting',
+                resourceId: DEFAULT_QUOTA_SETTING_KEY,
+                details: { bytes, platformAction: AuditAction.ADMIN_WORKSPACE_ACTION } as any,
+            },
+        });
         return this.getAll();
     }
 }

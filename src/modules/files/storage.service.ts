@@ -120,6 +120,34 @@ export class StorageService {
     }
 
     /**
+     * Store a buffer we produced ourselves, such as a re-encoded invoice logo.
+     *
+     * Separate from processAndUpload, which takes an uploaded file from disk
+     * and decides how to process it. Here the bytes are already final.
+     */
+    async uploadBuffer(objectName: string, buffer: Buffer, contentType: string): Promise<void> {
+        const client = getMinioClient();
+        await minioBreaker.execute(
+            () => client.putObject(config.MINIO_BUCKET, objectName, buffer, buffer.length, {
+                'Content-Type': contentType,
+            })
+        );
+    }
+
+    /**
+     * Read an object fully into memory.
+     *
+     * Only for small assets — a logo being embedded in a PDF. Anything a user
+     * uploaded is streamed or presigned instead.
+     */
+    async getObjectBuffer(objectName: string): Promise<Buffer> {
+        const stream = await this.getObject(objectName);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) chunks.push(chunk as Buffer);
+        return Buffer.concat(chunks);
+    }
+
+    /**
      * Generate a temporary Presigned URL (15 mins default)
      */
     async generatePresignedUrl(objectName: string, expiryInSeconds: number = 900): Promise<string> {

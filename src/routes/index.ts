@@ -12,6 +12,7 @@ import {
     contactLinksRouter,
 } from '../modules/contact-links/contact-links.routes';
 import referralsRoutes from '../modules/referrals/referrals.routes';
+import { storageWorkspaceRouter } from '../modules/storage/storage.routes';
 import paymentModesRoutes from '../modules/payment-modes/payment-modes.routes';
 import filesRoutes from '../modules/files/files.routes';
 import reportsRoutes from '../modules/reports/reports.routes';
@@ -36,6 +37,7 @@ import { itemCategoriesRouter } from '../modules/inventory/item-categories.route
 import { agreementsRouter } from '../modules/inventory/agreements.routes';
 import catalogRoutes from '../modules/catalog/catalog.routes';
 import invoicingRoutes from '../modules/invoicing/invoicing.routes';
+import { invoiceLogoRouter } from '../modules/invoicing/invoice-logo.routes';
 import projectsRoutes from '../modules/projects/projects.routes';
 import tasksRoutes from '../modules/tasks/tasks.routes';
 import ticketingRoutes from '../modules/ticketing/ticketing.routes';
@@ -91,6 +93,7 @@ router.use('/contacts', contactsRoutes);
 router.use('/workspaces/:workspaceId/contact-links', contactLinksWorkspaceRouter);
 router.use('/contact-links', contactLinksRouter);
 router.use('/workspaces/:workspaceId/referrals', referralsRoutes);
+router.use('/workspaces/:workspaceId/storage', storageWorkspaceRouter);
 router.use('/payment-modes', paymentModesRoutes);
 router.use('/files', filesRoutes);
 router.use('/reports', reportsRoutes);
@@ -108,6 +111,11 @@ router.use('/workspaces/:workspaceId/obligations', workspaceObligationsRouter);
 // ─── Developer API Keys ───────────────────────────────
 // Scoped to a workspace; requires MANAGE_API_KEYS permission (see api-keys.routes.ts).
 router.use('/workspaces/:workspaceId/api-keys', apiKeysRoutes);
+
+// ─── Invoice logos (no session) ───────────────────────
+// Printed on invoices and embedded in the emails they are sent in, so a
+// customer's browser and mail client must be able to load it. See the router.
+router.use('/invoice-logos', invoiceLogoRouter);
 
 // ─── External Integration (API Key auth, not cookie JWT) ──
 // Callers present X-API-Key header. No session required.

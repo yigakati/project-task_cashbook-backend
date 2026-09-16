@@ -1,4 +1,5 @@
 import { StatusCodes } from 'http-status-codes';
+import { formatBytes } from '../../utils/format-bytes';
 
 export class AppError extends Error {
     public readonly statusCode: number;
@@ -96,5 +97,28 @@ export class ConflictError extends AppError {
 export class RateLimitError extends AppError {
     constructor(message = 'Too many requests, please try again later') {
         super(message, StatusCodes.TOO_MANY_REQUESTS, 'RATE_LIMIT');
+    }
+}
+
+/**
+ * An upload that would take a workspace past its storage allowance.
+ *
+ * Carries the numbers so the client can show how full the workspace is, not
+ * just that something failed.
+ */
+export class StorageQuotaExceededError extends AppError {
+    public readonly usedBytes: number;
+    public readonly limitBytes: number;
+
+    constructor(usedBytes: number, limitBytes: number, incomingBytes: number) {
+        super(
+            `This workspace has used ${formatBytes(usedBytes)} of its ${formatBytes(limitBytes)} storage, `
+            + `so this ${formatBytes(incomingBytes)} file won't fit. Remove files you no longer need, `
+            + 'or ask an owner or admin to request more space under Business Settings → Storage.',
+            StatusCodes.FORBIDDEN,
+            'STORAGE_QUOTA_EXCEEDED',
+        );
+        this.usedBytes = usedBytes;
+        this.limitBytes = limitBytes;
     }
 }

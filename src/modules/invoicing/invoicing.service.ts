@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, InvoiceStatus, ContactType, ObligationStatus, ObligationType, InventoryReferenceType, InventoryTransactionType } from '@prisma/client';
+import { PrismaClient, InvoiceSettings, InvoiceStatus, ContactType, ObligationStatus, ObligationType, InventoryReferenceType, InventoryTransactionType } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { InvoicingRepository } from './invoicing.repository';
 import { AppError, NotFoundError } from '../../core/errors/AppError';
@@ -17,9 +17,13 @@ import {
 } from './invoicing.dto';
 import { assertSameCurrency, normalizeCurrency } from '../../core/finance';
 import sharp from 'sharp';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { r2Client } from '../../config/cloudflare';
-import { config } from '../../config';
+import { logger } from '../../utils/logger';
+import { StorageService } from '../files/storage.service';
+import { LOGO_FILE_PATTERN, LOGO_PREFIX, invoiceLogoUrl, logoObjectKey } from './invoice-logo';
+import {
+    assertStorageAvailable,
+    lockWorkspaceStorage,
+} from '../storage/storage-quota.service';
 
 // ─── Internal type for calculated line items ───────────────────────────────────
 interface CalculatedItem {
@@ -45,8 +49,19 @@ export class InvoicingService {
     constructor(
         private repository: InvoicingRepository,
         private inventoryService: InventoryService,
+        private storage: StorageService,
         @inject('PrismaClient') private prisma: PrismaClient,
     ) { }
+
+    /**
+     * Settings as the API hands them out.
+     *
+     * logoUrl is derived from the stored key rather than kept in a column, so
+     * it is always right for the address this deployment answers on.
+     */
+    private withLogoUrl<T extends { logoKey: string | null }>(settings: T) {
+        return { ...settings, logoUrl: invoiceLogoUrl(settings.logoKey) };
+    }
 
     // ═══════════════════════════════════════════════════════
     // ─── Create Invoice (DRAFT) ────────────────────────────
@@ -516,7 +531,7 @@ export class InvoicingService {
                     dueDate: new Date(invoice.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
                     itemsSummary,
                     notes: invoice.notes,
-                    logoUrl: settings?.logoUrl || null,
+                    logoUrl: invoiceLogoUrl(settings?.logoKey),
                 });
 
                 await sendEmail({
@@ -792,21 +807,68 @@ export class InvoicingService {
         if (!settings) {
             settings = await this.prisma.invoiceSettings.create({ data: { workspaceId } });
         }
-        return settings;
+        return this.withLogoUrl(settings);
+    }
+
+    /**
+     * The stored object behind a public logo URL.
+     *
+     * The requested name has to be the logo that workspace references right
+     * now, so an old file name stops resolving as soon as the logo changes.
+     */
+    async resolveLogoKey(file: string): Promise<string> {
+        if (!LOGO_FILE_PATTERN.test(file)) throw new NotFoundError('Logo');
+
+        const settings = await this.prisma.invoiceSettings.findFirst({
+            where: { workspaceId: file.slice(0, 36), logoKey: `${LOGO_PREFIX}${file}` },
+            select: { logoKey: true },
+        });
+        if (!settings?.logoKey) throw new NotFoundError('Logo');
+        return settings.logoKey;
     }
 
     async updateSettings(workspaceId: string, userId: string, dto: UpdateInvoiceSettingsDto) {
+        const current = await this.prisma.invoiceSettings.findUnique({
+            where: { workspaceId },
+            select: { logoKey: true },
+        });
+
+        // A logo can be uploaded or removed, not typed in. The URL used to be
+        // free text, which parked the image outside this workspace's storage
+        // allowance and outside anything we could serve or delete.
+        // Re-sending the current value, as the settings form does on every
+        // save, is fine.
+        const data: Record<string, unknown> = { ...dto };
+        delete data.logoUrl; // derived from logoKey, never stored
+        let orphanedLogoKey: string | null = null;
+        if (dto.logoUrl !== undefined && dto.logoUrl !== invoiceLogoUrl(current?.logoKey)) {
+            if (dto.logoUrl !== null) {
+                throw new AppError(
+                    'Upload the logo as an image file — linking to an image hosted elsewhere is not supported.',
+                    400,
+                    'LOGO_URL_NOT_ALLOWED',
+                );
+            }
+            data.logoKey = null;
+            data.logoSize = null;
+            orphanedLogoKey = current?.logoKey ?? null;
+        }
+
         const settings = await this.prisma.invoiceSettings.upsert({
             where: { workspaceId },
-            create: { workspaceId, ...dto },
-            update: dto,
+            create: { workspaceId, ...(data as any) },
+            update: data as any,
         });
+
+        // Removed: nothing references the file any more.
+        if (orphanedLogoKey) await this.deleteLogoObject(orphanedLogoKey);
+
 
         await this.prisma.auditLog.create({
             data: { userId, workspaceId, action: AuditAction.INVOICE_SETTINGS_UPDATED, resource: 'invoice_settings', resourceId: settings.id },
         });
 
-        return settings;
+        return this.withLogoUrl(settings);
     }
 
     async uploadLogo(workspaceId: string, userId: string, file: Express.Multer.File) {
@@ -815,31 +877,67 @@ export class InvoicingService {
             .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
             .png({ quality: 85, compressionLevel: 9 })
             .toBuffer();
+        const logoSize = processedBuffer.length;
 
-        // 2. Ship to Cloudflare R2
-        const fileName = `logos/${workspaceId}-${Date.now()}.png`;
-
-        await r2Client.send(new PutObjectCommand({
-            Bucket: config.CF_R2_BUCKET_NAME,
-            Key: fileName,
-            Body: processedBuffer,
-            ContentType: 'image/png',
-        }));
-
-        const logoUrl = `${config.CF_R2_PUBLIC_URL}/${fileName}`;
-
-        // 3. Reflect onto Database
-        const settings = await this.prisma.invoiceSettings.upsert({
+        // 2. Refuse before storing anything if it cannot fit. Replacing a logo
+        //    frees the old one, so only the difference has to.
+        const before = await this.prisma.invoiceSettings.findUnique({
             where: { workspaceId },
-            create: { workspaceId, logoUrl },
-            update: { logoUrl },
+            select: { logoSize: true },
         });
+        await assertStorageAvailable(this.prisma, workspaceId, logoSize, before?.logoSize ?? 0);
+
+        // 3. Store it, in the same object store as every other uploaded file.
+        const fileName = logoObjectKey(workspaceId);
+        await this.storage.uploadBuffer(fileName, processedBuffer, 'image/png');
+
+        // 4. Record it under the workspace's storage lock, re-checking the
+        //    allowance so two uploads racing each other cannot both squeeze in.
+        let result: { settings: InvoiceSettings; previousKey: string | null };
+        try {
+            result = await this.prisma.$transaction(async (tx) => {
+                await lockWorkspaceStorage(tx, workspaceId);
+                const current = await tx.invoiceSettings.findUnique({
+                    where: { workspaceId },
+                    select: { logoKey: true, logoSize: true },
+                });
+                await assertStorageAvailable(tx, workspaceId, logoSize, current?.logoSize ?? 0);
+
+                const settings = await tx.invoiceSettings.upsert({
+                    where: { workspaceId },
+                    create: { workspaceId, logoKey: fileName, logoSize },
+                    update: { logoKey: fileName, logoSize },
+                });
+                return { settings, previousKey: current?.logoKey ?? null };
+            });
+        } catch (error) {
+            await this.deleteLogoObject(fileName);
+            throw error;
+        }
+
+        // 5. The logo it replaced is referenced by nothing now. Without this,
+        //    every change left another file behind in the bucket.
+        if (result.previousKey && result.previousKey !== fileName) {
+            await this.deleteLogoObject(result.previousKey);
+        }
 
         await this.prisma.auditLog.create({
-            data: { userId, workspaceId, action: AuditAction.INVOICE_SETTINGS_UPDATED, resource: 'invoice_settings', resourceId: settings.id },
+            data: { userId, workspaceId, action: AuditAction.INVOICE_SETTINGS_UPDATED, resource: 'invoice_settings', resourceId: result.settings.id },
         });
 
-        return settings;
+        return this.withLogoUrl(result.settings);
+    }
+
+    /** Best-effort: a failed delete leaves an orphaned file, never a failed save. */
+    private async deleteLogoObject(key: string) {
+        try {
+            await this.storage.deleteObject(key);
+        } catch (error) {
+            logger.error('Could not delete a logo from storage', {
+                key,
+                error: error instanceof Error ? error.message : error,
+            });
+        }
     }
 
     // ═══════════════════════════════════════════════════════

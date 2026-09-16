@@ -1,8 +1,25 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient } from '@prisma/client';
 import { NotFoundError, AppError } from '../../core/errors/AppError';
+import * as fs from 'fs/promises';
 import { StorageService } from './storage.service';
 import { logger } from '../../utils/logger';
+import {
+    assertStorageAvailable,
+    assertStorageNotFull,
+    lockWorkspaceStorage,
+} from '../storage/storage-quota.service';
+
+type AttachmentOwner =
+    | { entryId: string; cashbookId: string }
+    | { taskId: string }
+    | { taskReportId: string }
+    | { expenseClaimId: string };
+
+/** Multer's disk copy, when a request is refused before processing gets to it. */
+async function discardTempFile(file: Express.Multer.File) {
+    if (file?.path) await fs.unlink(file.path).catch(() => {});
+}
 
 @injectable()
 export class FilesService {
@@ -24,31 +41,11 @@ export class FilesService {
         });
 
         if (!entry || entry.cashbookId !== cashbookId || entry.isDeleted) {
+            await discardTempFile(file);
             throw new NotFoundError('Entry');
         }
 
-        try {
-            const { objectName, mimeType, fileSize } = await this.storageService.processAndUpload(file);
-
-            const attachment = await this.prisma.attachment.create({
-                data: {
-                    entryId,
-                    cashbookId,
-                    uploadedById: userId,
-                    fileName: file.originalname,
-                    mimeType,
-                    fileSize,
-                    s3Key: objectName,
-                },
-            });
-
-            return attachment;
-        } catch (error) {
-            if (error instanceof AppError) throw error;
-            
-            logger.error('File upload failed', { error });
-            throw new AppError('File upload failed', 500, 'UPLOAD_FAILED');
-        }
+        return this.storeAttachment(entry.cashbook.workspaceId, { entryId, cashbookId }, userId, file);
     }
 
     /**
@@ -60,26 +57,72 @@ export class FilesService {
      * the guarantee that the row it writes satisfies attachments_exactly_one_owner.
      */
     async uploadOwnedAttachment(
+        workspaceId: string,
         owner: { taskId: string } | { taskReportId: string } | { expenseClaimId: string },
         userId: string,
         file: Express.Multer.File,
     ) {
-        try {
-            const { objectName, mimeType, fileSize } = await this.storageService.processAndUpload(file);
+        return this.storeAttachment(workspaceId, owner, userId, file);
+    }
 
-            return await this.prisma.attachment.create({
-                data: {
-                    ...owner,
-                    uploadedById: userId,
-                    fileName: file.originalname,
-                    mimeType,
-                    fileSize,
-                    s3Key: objectName,
-                },
-            });
+    /**
+     * The one place a file is stored, whoever it belongs to.
+     *
+     * Checked twice against the workspace allowance: once cheaply up front, so
+     * a full workspace refuses before any processing happens, and once for
+     * real under the workspace's storage lock with the size actually stored —
+     * images shrink when re-encoded, and two uploads racing each other must
+     * not both fit into the same last few megabytes.
+     */
+    private async storeAttachment(
+        workspaceId: string,
+        owner: AttachmentOwner,
+        userId: string,
+        file: Express.Multer.File,
+    ) {
+        try {
+            await assertStorageNotFull(this.prisma, workspaceId, file.size);
+        } catch (error) {
+            await discardTempFile(file);
+            throw error;
+        }
+
+        let stored: { objectName: string; mimeType: string; fileSize: number };
+        try {
+            stored = await this.storageService.processAndUpload(file);
         } catch (error) {
             if (error instanceof AppError) throw error;
-            logger.error('File upload failed', { error, owner });
+            logger.error('File upload failed', { error, workspaceId });
+            throw new AppError('File upload failed', 500, 'UPLOAD_FAILED');
+        }
+
+        try {
+            return await this.prisma.$transaction(async (tx) => {
+                await lockWorkspaceStorage(tx, workspaceId);
+                await assertStorageAvailable(tx, workspaceId, stored.fileSize);
+                return tx.attachment.create({
+                    data: {
+                        ...owner,
+                        workspaceId,
+                        uploadedById: userId,
+                        fileName: file.originalname,
+                        mimeType: stored.mimeType,
+                        fileSize: stored.fileSize,
+                        s3Key: stored.objectName,
+                    },
+                });
+            });
+        } catch (error) {
+            // Refused (or failed) after the bytes were already stored: remove
+            // them rather than leave an object nothing references.
+            await this.storageService.deleteObject(stored.objectName).catch((cleanupError) =>
+                logger.error('Could not remove an upload that was refused', {
+                    cleanupError,
+                    objectName: stored.objectName,
+                }),
+            );
+            if (error instanceof AppError) throw error;
+            logger.error('File upload failed', { error, workspaceId });
             throw new AppError('File upload failed', 500, 'UPLOAD_FAILED');
         }
     }

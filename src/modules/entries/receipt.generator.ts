@@ -641,6 +641,8 @@ import PDFDocument from 'pdfkit';
 import https from 'https';
 import http from 'http';
 import sharp from 'sharp';
+import { container } from 'tsyringe';
+import { StorageService } from '../files/storage.service';
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE & LAYOUT CONSTANTS
@@ -749,7 +751,8 @@ export interface PdfReceipt {
 }
 
 export interface PdfSettings {
-    logoUrl?:       string | null;
+    /** Object key of the workspace's logo, if it has uploaded one. */
+    logoKey?:       string | null;
     accentColor?:   string | null;
     defaultFooter?: string | null;
     // `template` is accepted but ignored — single template only
@@ -761,30 +764,31 @@ export interface PdfSettings {
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function resolveLogo(settings: PdfSettings | null): Promise<Buffer | null> {
-    const isSvg = (u: string): boolean => /\.svg(\?.*)?$/i.test(u);
+    const shrink = (buf: Buffer) =>
+        // Prevent PDFKit RGB conversion memory spikes: strictly downscale
+        // huge images to maximum 250px before embedding into the PDF document.
+        sharp(buf).resize({ width: 250, withoutEnlargement: true }).png({ quality: 80 }).toBuffer();
 
-    const candidates: string[] = [];
-    const uploaded = settings?.logoUrl?.trim();
-    if (uploaded && !isSvg(uploaded)) candidates.push(uploaded);
-    candidates.push(FALLBACK_LOGO_URL);   // always include original fallback
-
-    for (const url of candidates) {
+    // The workspace's own logo, read straight out of the object store rather
+    // than fetched over HTTP. The logo used to be any URL somebody typed, and
+    // fetching that from here aimed this server at whatever host it named.
+    const key = settings?.logoKey?.trim();
+    if (key) {
         try {
-            const buf = await fetchUrlBuffer(url);
-            if (isPngOrJpeg(buf)) {
-                // Prevent PDFKit RGB conversion memory spikes: strictly downscale 
-                // huge images to maximum 250px before embedding into the PDF document.
-                return await sharp(buf)
-                    .resize({ width: 250, withoutEnlargement: true })
-                    .png({ quality: 80 })
-                    .toBuffer();
-            }
-            // Response is not a raster image (HTML 404 page, SVG body, etc.) — skip
+            const buf = await container.resolve(StorageService).getObjectBuffer(key);
+            if (isPngOrJpeg(buf)) return await shrink(buf);
         } catch {
-            // Network error / timeout / non-2xx — try next candidate
+            // Unreadable object — fall back to the platform logo.
         }
     }
-    return null;   // all candidates failed → initials circle fallback
+
+    try {
+        const buf = await fetchUrlBuffer(FALLBACK_LOGO_URL);
+        if (isPngOrJpeg(buf)) return await shrink(buf);
+    } catch {
+        // Network error / timeout / non-2xx — no logo at all.
+    }
+    return null;   // → initials circle fallback
 }
 
 function isPngOrJpeg(buf: Buffer): boolean {

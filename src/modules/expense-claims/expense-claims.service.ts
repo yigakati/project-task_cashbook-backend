@@ -483,7 +483,7 @@ export class ExpenseClaimsService {
         if (claim.status !== ApprovalStatus.PENDING) {
             throw new ConflictError('This claim has already been decided.');
         }
-        return this.filesService.uploadOwnedAttachment({ expenseClaimId: claimId }, userId, file);
+        return this.filesService.uploadOwnedAttachment(workspaceId, { expenseClaimId: claimId }, userId, file);
     }
 
     async listReceipts(claimId: string, workspaceId: string, userId: string) {

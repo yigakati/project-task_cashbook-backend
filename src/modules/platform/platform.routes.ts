@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { container } from 'tsyringe';
 import { PlatformController } from './platform.controller';
+import { storagePlatformRouter } from '../storage/storage.routes';
 import { authenticate } from '../../middlewares/authenticate';
 import { requireSuperAdmin } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
@@ -60,6 +61,10 @@ router.patch(
     validate(setReferralAgentSchema),
     controller.setReferralAgent.bind(controller) as any,
 );
+
+// ─── Storage allowances ────────────────────────────────
+// Requests for more space, and every workspace's usage, fullest first.
+router.use('/storage', storagePlatformRouter);
 
 router.get('/audit-logs', controller.listAuditLogs.bind(controller) as any);
 

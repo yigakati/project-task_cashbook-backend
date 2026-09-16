@@ -3,6 +3,7 @@ import { Response, NextFunction } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { PlatformService } from './platform.service';
 import { PlatformSettingsService } from './platform-settings.service';
+import { gbToBytes } from '../storage/storage-quota.service';
 import { AuthenticatedRequest } from '../../core/types';
 
 const page = (v: unknown) => Math.max(1, Number(v) || 1);
@@ -240,17 +241,24 @@ export class PlatformController {
 
     async updateSettings(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const data = await this.settings.setManualContacts(
-                req.body.manualContactsEnabled,
-                req.user.userId,
-            );
-            res.status(StatusCodes.OK).json({
-                success: true,
-                message: data.manualContactsEnabled
+            let data = await this.settings.getAll();
+            const changed: string[] = [];
+
+            if (req.body.manualContactsEnabled !== undefined) {
+                data = await this.settings.setManualContacts(req.body.manualContactsEnabled, req.user.userId);
+                changed.push(data.manualContactsEnabled
                     ? 'Manual contacts switched on for every workspace'
-                    : 'Manual contacts switched off for every workspace',
-                data,
-            });
+                    : 'Manual contacts switched off for every workspace');
+            }
+            if (req.body.defaultStorageQuotaGb !== undefined) {
+                data = await this.settings.setDefaultStorageQuota(
+                    gbToBytes(req.body.defaultStorageQuotaGb),
+                    req.user.userId,
+                );
+                changed.push('Default storage allowance updated');
+            }
+
+            res.status(StatusCodes.OK).json({ success: true, message: changed.join('. '), data });
         } catch (error) {
             next(error);
         }

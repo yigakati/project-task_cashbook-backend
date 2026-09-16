@@ -84,6 +84,8 @@ model User {
   referralAgentsAppointed  ReferralAgent[]         @relation("ReferralAgentAppointer")
   platformSettingsEdited   PlatformSetting[]       @relation("PlatformSettingEditor")
   referredBy               Referral?               @relation("ReferredUser")
+  storageRequestsMade      StorageQuotaRequest[]   @relation("StorageRequester")
+  storageRequestsDecided   StorageQuotaRequest[]   @relation("StorageDecider")
   settlementsRecorded      PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
   peerLinksInitiated       PeerLink[]              @relation("PeerLinkInitiator")
   peerLinksReceived        PeerLink[]              @relation("PeerLinkCounterparty")
@@ -201,6 +203,9 @@ model Workspace {
   /// the GL, matching cash-basis totalExpense. PERPETUAL capitalizes purchases
   /// and recognizes COGS at sale, which changes what totalExpense means.
   inventoryValuation      InventoryValuationMode @default(OFF) @map("inventory_valuation")
+  /// File storage allowance in bytes. Null = the platform default (1 GB unless
+  /// a superadmin changes it); set when a superadmin approves more.
+  storageQuotaBytes       BigInt?                @map("storage_quota_bytes")
   createdAt               DateTime               @default(now()) @map("created_at")
   updatedAt               DateTime               @updatedAt @map("updated_at")
 
@@ -222,6 +227,8 @@ model Workspace {
   financialAuditLogs     FinancialAuditLog[]
   pendingInvites         PendingInvite[]
   profile                WorkspaceProfile?
+  attachments            Attachment[]            @relation("WorkspaceAttachments")
+  storageRequests        StorageQuotaRequest[]
   contactLinksAsA        ContactLink[]           @relation("ContactLinkWorkspaceA")
   contactLinksAsB        ContactLink[]           @relation("ContactLinkWorkspaceB")
   contactLinkRequestsOut ContactLinkRequest[]    @relation("ContactLinkRequestRequester")
@@ -1089,6 +1096,10 @@ model Attachment {
   taskId         String?   @map("task_id") @db.Uuid
   taskReportId   String?   @map("task_report_id") @db.Uuid
   expenseClaimId String?   @map("expense_claim_id") @db.Uuid
+  /// The workspace whose storage this file counts against. Copied from the
+  /// owning entry/task/report/claim so a quota check is one indexed sum
+  /// rather than four joins.
+  workspaceId    String?   @map("workspace_id") @db.Uuid
   fileName       String    @map("file_name")
   fileSize       Int       @map("file_size")
   mimeType       String    @map("mime_type")
@@ -1103,6 +1114,7 @@ model Attachment {
   task         Task?             @relation(fields: [taskId], references: [id], onDelete: Cascade)
   taskReport   TaskReport?       @relation(fields: [taskReportId], references: [id], onDelete: Cascade)
   expenseClaim TaskExpenseClaim? @relation(fields: [expenseClaimId], references: [id], onDelete: Cascade)
+  workspace    Workspace?        @relation("WorkspaceAttachments", fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([cashbookId])
   @@index([entryId])
@@ -1110,6 +1122,7 @@ model Attachment {
   @@index([taskReportId])
   @@index([expenseClaimId])
   @@index([isDeleted])
+  @@index([workspaceId, isDeleted])
   @@map("attachments")
 }
 
@@ -2016,7 +2029,12 @@ model InvoiceItem {
 model InvoiceSettings {
   id            String   @id @default(uuid()) @db.Uuid
   workspaceId   String   @unique @map("workspace_id") @db.Uuid
-  logoUrl       String?  @map("logo_url")
+  /// Object key in MinIO, e.g. logos/<workspaceId>-<ms>.png. The only record
+  /// of a logo: its public URL is derived from this key at read time, so no
+  /// row carries a hostname that a domain change would strand.
+  logoKey       String?  @map("logo_key")
+  /// Bytes the logo takes against the workspace storage allowance.
+  logoSize      Int?     @map("logo_size")
   accentColor   String?  @default("#4F46E5") @map("accent_color")
   template      String   @default("classic") // classic | modern | contemporary
   defaultTerms  String?  @map("default_terms")
@@ -2968,6 +2986,7 @@ enum NotificationType {
   RENTAL_AGREEMENT_DECIDED
   CONTACT_LINK_RECEIVED
   CONTACT_LINK_DECIDED
+  STORAGE_REQUEST_DECIDED
 }
 
 /// What a notification points at, so it can link to something other than a task
@@ -2987,6 +3006,7 @@ enum NotificationEntityType {
   STOCK_TRANSFER
   RENTAL_AGREEMENT
   CONTACT_LINK_REQUEST
+  STORAGE_QUOTA_REQUEST
 }
 
 model Notification {
@@ -3776,4 +3796,44 @@ model ApiKey {
   @@index([keyHash])
   @@index([status])
   @@map("api_keys")
+}
+
+// ─── File storage allowance ────────────────────────────
+//
+// Nothing new is stored here: usage is counted from files that already exist
+// (attachments and the invoice logo). What this adds is the ceiling, and the
+// way to ask a superadmin to raise it.
+
+enum StorageRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  CANCELLED
+}
+
+/// A workspace asking a superadmin for more file storage.
+model StorageQuotaRequest {
+  id             String               @id @default(uuid()) @db.Uuid
+  workspaceId    String               @map("workspace_id") @db.Uuid
+  requestedById  String               @map("requested_by_id") @db.Uuid
+  /// The total allowance asked for, not an increment, so what gets approved
+  /// is never ambiguous.
+  requestedBytes BigInt               @map("requested_bytes")
+  reason         String?
+  status         StorageRequestStatus @default(PENDING)
+  /// What the superadmin actually granted — may differ from what was asked.
+  grantedBytes   BigInt?              @map("granted_bytes")
+  decidedById    String?              @map("decided_by_id") @db.Uuid
+  decisionNote   String?              @map("decision_note")
+  decidedAt      DateTime?            @map("decided_at")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedBy User      @relation("StorageRequester", fields: [requestedById], references: [id])
+  decidedBy   User?     @relation("StorageDecider", fields: [decidedById], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([status, createdAt])
+  @@map("storage_quota_requests")
 }

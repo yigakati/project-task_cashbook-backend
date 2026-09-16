@@ -110,6 +110,10 @@ export type SendInvoiceDto = z.infer<typeof sendInvoiceSchema>;
 // ─── Invoice Settings ──────────────────────────────────
 
 export const updateInvoiceSettingsSchema = z.object({
+    /**
+     * Only `null` (remove) or the current value is accepted — logos are
+     * uploaded, not linked. See InvoicingService#updateSettings.
+     */
     logoUrl: z.string().url().nullable().optional(),
     accentColor: z.string().max(20).optional(),
     template: z.enum(['classic', 'modern', 'contemporary']).optional(),

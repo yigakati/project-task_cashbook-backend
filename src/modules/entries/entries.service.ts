@@ -26,6 +26,7 @@ import { CashbookPermission, hasPermission } from '../../core/types/permissions'
 import { ObligationStatus, ObligationType } from '@prisma/client';
 import { InventoryService } from '../inventory/inventory.service';
 import { generateReceiptPdf } from './receipt.generator';
+import { invoiceLogoUrl } from '../invoicing/invoice-logo';
 import { receiptEmailTemplate } from '../../utils/emailTemplates';
 import { sendEmail } from '../../config/email';
 import {
@@ -1651,7 +1652,7 @@ export class EntriesService {
             // phone fields here would print empty lines on every receipt.
             business: {
                 name: workspace?.name ?? 'Business',
-                logoUrl: settings?.logoUrl ?? null,
+                logoUrl: invoiceLogoUrl(settings?.logoKey),
                 accentColor: settings?.accentColor ?? null,
                 footer: settings?.defaultFooter ?? null,
                 notes: settings?.defaultNotes ?? null,
@@ -1753,7 +1754,7 @@ export class EntriesService {
             amountPaid: amountStr,
             paymentDate: paymentDateStr,
             remainingBal: remainingStr,
-            logoUrl: settings?.logoUrl || null,
+            logoUrl: invoiceLogoUrl(settings?.logoKey),
         });
 
         await sendEmail({

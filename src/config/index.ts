@@ -100,11 +100,17 @@ const envSchema = z.object({
      */
     APP_URL: z.string().url().default('https://inchange.odixtec.net'),
 
-    CF_R2_ACCOUNT_ID: z.string().min(1, 'CF_R2_ACCOUNT_ID is required').default('dummy_account_id'),
-    CF_R2_ACCESS_KEY_ID: z.string().min(1, 'CF_R2_ACCESS_KEY_ID is required').default('dummy_key_id'),
-    CF_R2_SECRET_ACCESS_KEY: z.string().min(1, 'CF_R2_SECRET_ACCESS_KEY is required').default('dummy_secret'),
-    CF_R2_BUCKET_NAME: z.string().min(1, 'CF_R2_BUCKET_NAME is required').default('inchange-assets'),
-    CF_R2_PUBLIC_URL: z.string().url().default('https://pub-dummy.r2.dev'),
+    /**
+     * This API's own externally reachable base URL.
+     *
+     * Used to build links to assets the API serves — an invoice logo, which is
+     * shown in the app and embedded in the email a customer opens. Rows store
+     * only the object key, so changing this re-points every logo instead of
+     * stranding the ones uploaded under the old address.
+     *
+     * Set it in production: the default is only right on a dev machine.
+     */
+    API_PUBLIC_URL: z.string().url().default('http://localhost:5000'),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -34,7 +34,12 @@ export type SetReferralAgentDto = z.infer<typeof setReferralAgentSchema>;
  * than in the per-workspace feature grants.
  */
 export const updatePlatformSettingsSchema = z.object({
-    manualContactsEnabled: z.boolean(),
-});
+    manualContactsEnabled: z.boolean().optional(),
+    /** The storage allowance every workspace gets unless it has its own. */
+    defaultStorageQuotaGb: z.number().positive().max(1024).optional(),
+}).refine(
+    (v) => v.manualContactsEnabled !== undefined || v.defaultStorageQuotaGb !== undefined,
+    { message: 'Nothing to update' },
+);
 
 export type UpdatePlatformSettingsDto = z.infer<typeof updatePlatformSettingsSchema>;

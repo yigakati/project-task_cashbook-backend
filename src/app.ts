@@ -56,7 +56,10 @@ app.use('/api/v1', (_req, res, next) => {
 app.use('/api/v1', healthRoutes);
 
 // ─── Other API Routes ───
-app.use('/api/v1', globalRateLimiter, routes);
+// Mounted from config rather than a literal: absolute links the API builds to
+// its own endpoints (an invoice logo URL that goes into a customer's email)
+// are derived from API_PREFIX, and the two must not be able to drift apart.
+app.use(config.API_PREFIX, globalRateLimiter, routes);
 
 // ─── 404 Handler ───────────────────────────────────────
 app.use((req, res) => {

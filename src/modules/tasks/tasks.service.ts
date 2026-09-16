@@ -1055,7 +1055,7 @@ export class TasksService {
     ) {
         const task = await this.getTaskInWorkspace(taskId, workspaceId);
         await this.assertCanViewTask(task, workspaceId, userId);
-        return this.filesService.uploadOwnedAttachment({ taskId }, userId, file);
+        return this.filesService.uploadOwnedAttachment(workspaceId, { taskId }, userId, file);
     }
 
     async listTaskAttachments(taskId: string, workspaceId: string, userId: string) {
@@ -1085,7 +1085,7 @@ export class TasksService {
         if (report.status !== ApprovalStatus.PENDING) {
             throw new ConflictError('That report has already been reviewed.');
         }
-        return this.filesService.uploadOwnedAttachment({ taskReportId: reportId }, userId, file);
+        return this.filesService.uploadOwnedAttachment(workspaceId, { taskReportId: reportId }, userId, file);
     }
 
     async listReportAttachments(reportId: string, workspaceId: string, userId: string) {

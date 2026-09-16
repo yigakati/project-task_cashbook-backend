@@ -3,6 +3,8 @@ import { Decimal } from '@prisma/client/runtime/library';
 import https from 'https';
 import http from 'http';
 import sharp from 'sharp';
+import { container } from 'tsyringe';
+import { StorageService } from '../files/storage.service';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 /**
@@ -94,7 +96,8 @@ interface PdfInvoice {
 }
 
 interface PdfSettings {
-    logoUrl?: string | null;
+    /** Object key of the workspace's logo, if it has uploaded one. */
+    logoKey?: string | null;
     accentColor?: string | null;
     template?: string | null;
     defaultTerms?: string | null;
@@ -104,30 +107,35 @@ interface PdfSettings {
 
 // ─── Logo resolution ────────────────────────────────────────────────────────────
 /**
- * Resolves the logo to render with a strict priority chain:
+ * Resolves the logo to render:
  *
- *  1. Business-uploaded logo URL (settings.logoUrl) — must be PNG or JPEG.
- *     Any URL ending in .svg is skipped because pdfkit cannot render SVG.
- *  2. Local fallback PNG  (http://localhost:3000/logo.png) — your branded
- *     placeholder rendered and served by Next.js / Express.
- *  3. null — no renderable logo found; header falls back to text-only layout.
+ *  1. The workspace's own logo, read straight out of the object store by its
+ *     key. Not fetched over HTTP — the URL used to be free text, and fetching
+ *     whatever address someone typed let them aim this server at hosts it
+ *     should never reach. There is no URL in the decision any more.
+ *  2. The platform logo, fetched from the marketing site.
+ *  3. null — nothing renderable; the header falls back to a text-only layout.
  *
- * Each candidate URL is validated by checking the raster magic bytes of the
- * response body, so a misconfigured URL that returns HTML or an SVG will be
- * rejected gracefully rather than crashing pdfkit.
+ * Every candidate is checked for raster magic bytes, so a stored object that
+ * turns out to be HTML or an SVG is skipped rather than crashing pdfkit.
  */
 async function resolveLogo(settings: PdfSettings | null): Promise<Buffer | null> {
-    const isSvg = (url: string): boolean => /\.svg(\?.*)?$/i.test(url);
+    const shrink = (buf: Buffer) =>
+        // Prevent PDFKit RGB conversion memory spikes: strictly downscale
+        // huge images to maximum 250px before embedding into the document.
+        sharp(buf).resize({ width: 250, withoutEnlargement: true }).png({ quality: 80 }).toBuffer();
 
-    const candidates: string[] = [];
+    const key = settings?.logoKey?.trim();
+    if (key) {
+        try {
+            const buf = await container.resolve(StorageService).getObjectBuffer(key);
+            if (isPngOrJpeg(buf)) return await shrink(buf);
+        } catch {
+            // Unreadable object — fall through to the platform logo.
+        }
+    }
 
-    const uploaded = settings?.logoUrl?.trim();
-    if (uploaded && !isSvg(uploaded)) candidates.push(uploaded);
-
-    // Always include the PNG fallback as the last resort
-    candidates.push(FALLBACK_LOGO_URL);
-
-    for (const url of candidates) {
+    for (const url of [FALLBACK_LOGO_URL]) {
         try {
             const buf = await fetchUrlBuffer(url);
             if (isPngOrJpeg(buf)) {

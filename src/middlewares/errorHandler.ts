@@ -1,6 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { StatusCodes } from 'http-status-codes';
-import { AppError, EmailNotVerifiedError, WorkspaceProfileIncompleteError } from '../core/errors/AppError';
+import {
+    AppError,
+    EmailNotVerifiedError,
+    WorkspaceProfileIncompleteError,
+    StorageQuotaExceededError,
+} from '../core/errors/AppError';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { ApiResponse } from '../core/types';
@@ -17,6 +22,8 @@ export function errorHandler(
             email?: string;
             workspaceId?: string;
             missing?: string[];
+            usedBytes?: number;
+            limitBytes?: number;
         } = {
             success: false,
             message: err.message,
@@ -34,6 +41,11 @@ export function errorHandler(
             ...(err instanceof WorkspaceProfileIncompleteError && {
                 workspaceId: err.workspaceId,
                 missing: err.missing,
+            }),
+            // How full the workspace is, so the client can say so.
+            ...(err instanceof StorageQuotaExceededError && {
+                usedBytes: err.usedBytes,
+                limitBytes: err.limitBytes,
             }),
         };
 
