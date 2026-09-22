@@ -11,6 +11,7 @@ import {
     updateCashbookSchema,
     addCashbookMemberSchema,
     updateCashbookMemberRoleSchema,
+    archiveCashbookSchema,
 } from './cashbooks.dto';
 
 const router = Router({ mergeParams: true });
@@ -61,7 +62,20 @@ router.patch(
     cashbooksController.update.bind(cashbooksController) as any
 );
 
-// Delete cashbook
+// Archive or restore a cashbook.
+//
+// Guarded by DELETE_CASHBOOK rather than UPDATE_CASHBOOK: archiving retires a
+// book for everyone who can see it, so it belongs to whoever could have
+// deleted it. requireCashbookMember lets this through on an already-archived
+// book — restoring one is the whole point.
+router.post(
+    '/:cashbookId/archive',
+    requireCashbookMember(CashbookPermission.DELETE_CASHBOOK) as any,
+    validate(archiveCashbookSchema),
+    cashbooksController.archive.bind(cashbooksController) as any
+);
+
+// Delete cashbook — only ever allowed on a book with no entries at all.
 router.delete(
     '/:cashbookId',
     requireCashbookMember(CashbookPermission.DELETE_CASHBOOK) as any,

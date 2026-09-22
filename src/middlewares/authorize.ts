@@ -1,6 +1,8 @@
 import { Response, NextFunction } from 'express';
 import { getPrismaClient } from '../config/database';
+import { StatusCodes } from 'http-status-codes';
 import {
+    AppError,
     AuthorizationError,
     NotFoundError,
 } from '../core/errors/AppError';
@@ -12,7 +14,7 @@ import {
     WorkspaceType,
     StaffTag,
 } from '../core/types';
-import { CashbookPermission, hasPermission } from '../core/types/permissions';
+import { CashbookPermission, hasPermission, CASHBOOK_WRITE_PERMISSIONS } from '../core/types/permissions';
 import {
     WorkspacePermission,
     hasWorkspacePermission,
@@ -320,6 +322,27 @@ export function requireTicketing(
     };
 }
 
+/**
+ * An archived book is read-only.
+ *
+ * Called only once access has been established, so someone with no access
+ * still gets the ordinary answer rather than learning the book exists and is
+ * archived.
+ */
+function assertNotArchivedForWrite(
+    cashbook: { name: string; archivedAt: Date | null },
+    requiredPermission?: CashbookPermission,
+): void {
+    if (!cashbook.archivedAt || !requiredPermission) return;
+    if (!CASHBOOK_WRITE_PERMISSIONS.has(requiredPermission)) return;
+
+    throw new AppError(
+        `"${cashbook.name}" is archived, so it cannot be changed. Restore it first.`,
+        StatusCodes.CONFLICT,
+        'CASHBOOK_ARCHIVED',
+    );
+}
+
 // ─── Cashbook Membership Guard ─────────────────────────
 export function requireCashbookMember(requiredPermission?: CashbookPermission) {
     return async (req: AuthenticatedRequest, _res: Response, next: NextFunction): Promise<void> => {
@@ -350,6 +373,8 @@ export function requireCashbookMember(requiredPermission?: CashbookPermission) {
                     await logPermissionDenied(userId, 'CASHBOOK_ACCESS', 'cashbook', cashbookId);
                     throw new AuthorizationError('Access denied to this cashbook');
                 }
+                assertNotArchivedForWrite(cashbook, requiredPermission);
+
                 (req as any).cashbook = cashbook;
                 (req as any).cashbookRole = CashbookRole.PRIMARY_ADMIN;
                 next();
@@ -402,6 +427,8 @@ export function requireCashbookMember(requiredPermission?: CashbookPermission) {
                     `You do not have the '${requiredPermission}' permission for this cashbook`
                 );
             }
+
+            assertNotArchivedForWrite(cashbook, requiredPermission);
 
             (req as any).cashbook = cashbook;
             (req as any).cashbookRole = userRole;

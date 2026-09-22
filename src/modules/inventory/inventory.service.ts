@@ -4,6 +4,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { withFinancialTransaction } from '../../core/db/transaction';
 import { InventoryRepository } from './inventory.repository';
 import { AppError, NotFoundError } from '../../core/errors/AppError';
+import { assertCashbookWritable } from '../cashbooks/cashbook-state';
 import { AuditAction } from '../../core/types';
 import {
     CreateInventoryItemDto,
@@ -1517,6 +1518,7 @@ export class InventoryService {
             if (!cashbook || !cashbook.isActive || cashbook.workspaceId !== workspaceId) {
                 throw new NotFoundError('Cashbook');
             }
+            assertCashbookWritable(cashbook);
 
             const item = await tx.inventoryItem.findUnique({
                 where: { id: dto.itemId },

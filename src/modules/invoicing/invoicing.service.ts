@@ -19,6 +19,7 @@ import { assertSameCurrency, normalizeCurrency } from '../../core/finance';
 import sharp from 'sharp';
 import { logger } from '../../utils/logger';
 import { StorageService } from '../files/storage.service';
+import { assertCashbookWritable } from '../cashbooks/cashbook-state';
 import { LOGO_FILE_PATTERN, LOGO_PREFIX, invoiceLogoUrl, logoObjectKey } from './invoice-logo';
 import {
     assertStorageAvailable,
@@ -88,11 +89,15 @@ export class InvoicingService {
         // Validate cashbook
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: dto.cashbookId },
-            select: { id: true, workspaceId: true, isActive: true, currency: true },
+            select: {
+                id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                archivedAt: true,
+            },
         });
         if (!cashbook || cashbook.workspaceId !== workspaceId || !cashbook.isActive) {
             throw new NotFoundError('Cashbook');
         }
+        assertCashbookWritable(cashbook);
 
         if (dto.currency) {
             assertSameCurrency(workspaceCurrency, dto.currency, 'workspace base vs invoice');
@@ -225,11 +230,15 @@ export class InvoicingService {
             if (cashbookId) {
                 const cashbook = await this.prisma.cashbook.findUnique({
                     where: { id: cashbookId },
-                    select: { id: true, workspaceId: true, isActive: true, currency: true },
+                    select: {
+                        id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                        archivedAt: true,
+                    },
                 });
                 if (!cashbook || cashbook.workspaceId !== workspaceId || !cashbook.isActive) {
                     throw new NotFoundError('Cashbook');
                 }
+                assertCashbookWritable(cashbook);
                 assertSameCurrency(cashbook.currency, nextCurrency, 'invoice vs cashbook');
             }
         }
@@ -318,11 +327,15 @@ export class InvoicingService {
 
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: cashbookId },
-            select: { id: true, workspaceId: true, isActive: true, currency: true },
+            select: {
+                id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                archivedAt: true,
+            },
         });
         if (!cashbook || cashbook.workspaceId !== workspaceId || !cashbook.isActive) {
             throw new NotFoundError('Cashbook');
         }
+        assertCashbookWritable(cashbook);
         assertSameCurrency(cashbook.currency, invoice.currency, 'invoice vs cashbook on send');
 
         if (payment?.paymentAmount) {

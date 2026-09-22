@@ -49,6 +49,35 @@ export enum CashbookPermission {
     VIEW_AUDIT_LOG = 'VIEW_AUDIT_LOG',
 }
 
+/**
+ * The permissions that change a book or what is in it.
+ *
+ * An archived book answers reads as normal and refuses these — that is what
+ * archiving means here: the history stays readable and reportable, but nothing
+ * new lands in it.
+ *
+ * DELETE_CASHBOOK is deliberately absent. Restoring an archived book, and
+ * deleting one that turned out to be empty, are exactly the two actions that
+ * still have to work once it is archived.
+ */
+export const CASHBOOK_WRITE_PERMISSIONS: ReadonlySet<CashbookPermission> = new Set([
+    CashbookPermission.UPDATE_CASHBOOK,
+    CashbookPermission.MANAGE_SETTINGS,
+    CashbookPermission.ADD_MEMBER,
+    CashbookPermission.REMOVE_MEMBER,
+    CashbookPermission.CHANGE_MEMBER_ROLE,
+    CashbookPermission.CREATE_ENTRY,
+    CashbookPermission.UPDATE_ENTRY,
+    CashbookPermission.DELETE_ENTRY,
+    CashbookPermission.APPROVE_DELETE,
+    CashbookPermission.MANAGE_CATEGORIES,
+    CashbookPermission.MANAGE_CONTACTS,
+    CashbookPermission.MANAGE_PAYMENT_MODES,
+    CashbookPermission.UPLOAD_ATTACHMENT,
+    CashbookPermission.DELETE_ATTACHMENT,
+    CashbookPermission.MANAGE_OBLIGATIONS,
+]);
+
 // ─── Role → Permission Matrix ──────────────────────────
 export const CASHBOOK_PERMISSION_MATRIX: Record<CashbookRole, Set<CashbookPermission>> = {
     [CashbookRole.PRIMARY_ADMIN]: new Set(Object.values(CashbookPermission)),

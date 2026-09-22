@@ -14,6 +14,7 @@ export class CashbooksController {
                 req.params.workspaceId as string,
                 req.user.userId,
                 (req as { workspaceRole?: WorkspaceRole }).workspaceRole,
+                req.query.includeArchived === 'true',
             );
             res.status(StatusCodes.OK).json({
                 success: true,
@@ -97,6 +98,26 @@ export class CashbooksController {
             res.status(StatusCodes.OK).json({
                 success: true,
                 message: 'Cashbook deleted successfully',
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async archive(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { archive } = req.body as { archive: boolean };
+            const cashbook = await this.cashbooksService.setArchived(
+                req.params.cashbookId as string,
+                req.user.userId,
+                archive,
+            );
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: archive
+                    ? 'Book archived. Its history is kept and you can restore it any time.'
+                    : 'Book restored.',
+                data: cashbook,
             });
         } catch (error) {
             next(error);

@@ -344,6 +344,12 @@ model Cashbook {
   totalExpense        Decimal  @default(0) @map("total_expense") @db.Decimal(20, 4)
   allowBackdate       Boolean  @default(false) @map("allow_backdate")
   isActive            Boolean  @default(true) @map("is_active")
+  /// When the book was retired. An archived book keeps every entry, drops out
+  /// of the active list and refuses new ones, and can be restored.
+  ///
+  /// Distinct from isActive = false, which is deletion and is allowed only for
+  /// a book that never recorded an entry.
+  archivedAt          DateTime? @map("archived_at")
   /// Short, human-readable reference code for external API integrations.
   /// It is deliberately nullable: a book is not exposed to integrations until
   /// an authorised user explicitly activates it.
@@ -369,6 +375,7 @@ model Cashbook {
   ticketSettings        TicketSettings?
 
   @@index([workspaceId])
+  @@index([workspaceId, archivedAt])
   @@map("cashbooks")
 }
 

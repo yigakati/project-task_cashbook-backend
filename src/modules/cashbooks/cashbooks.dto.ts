@@ -27,3 +27,15 @@ export type CreateCashbookDto = z.infer<typeof createCashbookSchema>;
 export type UpdateCashbookDto = z.infer<typeof updateCashbookSchema>;
 export type AddCashbookMemberDto = z.infer<typeof addCashbookMemberSchema>;
 export type UpdateCashbookMemberRoleDto = z.infer<typeof updateCashbookMemberRoleSchema>;
+
+/**
+ * Archive a book, or restore one.
+ *
+ * A single endpoint taking a boolean rather than two verbs, matching how
+ * accounts already work, so both lifecycles read the same way.
+ */
+export const archiveCashbookSchema = z.object({
+    archive: z.boolean(),
+});
+
+export type ArchiveCashbookDto = z.infer<typeof archiveCashbookSchema>;

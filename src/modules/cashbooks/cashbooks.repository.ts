@@ -24,9 +24,15 @@ export class CashbooksRepository {
         });
     }
 
-    async findByWorkspaceId(workspaceId: string) {
+    async findByWorkspaceId(workspaceId: string, includeArchived = false) {
         return this.prisma.cashbook.findMany({
-            where: { workspaceId, isActive: true },
+            where: {
+                workspaceId,
+                isActive: true,
+                // An archived book is retired, not deleted: it stays out of
+                // the everyday list but can still be asked for explicitly.
+                ...(includeArchived ? {} : { archivedAt: null }),
+            },
             include: {
                 _count: {
                     select: {
@@ -35,7 +41,7 @@ export class CashbooksRepository {
                     },
                 },
             },
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ archivedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'desc' }],
         });
     }
 
@@ -117,11 +123,12 @@ export class CashbooksRepository {
         });
     }
 
-    async findUserAccessibleCashbooks(workspaceId: string, userId: string) {
+    async findUserAccessibleCashbooks(workspaceId: string, userId: string, includeArchived = false) {
         return this.prisma.cashbook.findMany({
             where: {
                 workspaceId,
                 isActive: true,
+                ...(includeArchived ? {} : { archivedAt: null }),
                 members: { some: { userId } },
             },
             include: {
@@ -132,7 +139,7 @@ export class CashbooksRepository {
                     },
                 },
             },
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ archivedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'desc' }],
         });
     }
 

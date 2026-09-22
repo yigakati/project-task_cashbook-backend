@@ -1,9 +1,40 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient, Account, Prisma, AccountTransaction } from '@prisma/client';
 
+/**
+ * An account plus how much history hangs off it.
+ *
+ * The counts are what decide whether Delete can be offered at all: an account
+ * with any activity can only be archived, so the client should never present
+ * a button the server is bound to refuse.
+ */
 export type AccountWithDetails = Prisma.AccountGetPayload<{
-    include: { accountType: true }
+    include: {
+        accountType: true,
+        _count: {
+            select: {
+                transactions: true,
+                transfersFrom: true,
+                transfersTo: true,
+                ticketSales: true,
+                expenseClaims: true,
+            },
+        },
+    }
 }>;
+
+const ACCOUNT_INCLUDE = {
+    accountType: true,
+    _count: {
+        select: {
+            transactions: true,
+            transfersFrom: true,
+            transfersTo: true,
+            ticketSales: true,
+            expenseClaims: true,
+        },
+    },
+} satisfies Prisma.AccountInclude;
 
 @injectable()
 export class AccountsRepository {
@@ -12,14 +43,14 @@ export class AccountsRepository {
     async create(data: Prisma.AccountUncheckedCreateInput): Promise<AccountWithDetails> {
         return this.prisma.account.create({
             data,
-            include: { accountType: true }
+            include: ACCOUNT_INCLUDE
         });
     }
 
     async findAllByWorkspace(workspaceId: string): Promise<AccountWithDetails[]> {
         return this.prisma.account.findMany({
             where: { workspaceId },
-            include: { accountType: true },
+            include: ACCOUNT_INCLUDE,
             orderBy: { name: 'asc' }
         });
     }
@@ -27,7 +58,7 @@ export class AccountsRepository {
     async findById(id: string): Promise<AccountWithDetails | null> {
         return this.prisma.account.findUnique({
             where: { id },
-            include: { accountType: true }
+            include: ACCOUNT_INCLUDE
         });
     }
 
@@ -35,7 +66,7 @@ export class AccountsRepository {
         return this.prisma.account.update({
             where: { id },
             data,
-            include: { accountType: true }
+            include: ACCOUNT_INCLUDE
         });
     }
 

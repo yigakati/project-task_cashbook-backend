@@ -2,6 +2,7 @@ import { injectable, inject } from 'tsyringe';
 import { Prisma, PrismaClient, TransactionSourceType, InventoryReferenceType } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { EntriesRepository } from './entries.repository';
+import { assertCashbookWritable } from '../cashbooks/cashbook-state';
 import {
     NotFoundError,
     AppError,
@@ -196,6 +197,7 @@ export class EntriesService {
         if (!cashbook || !cashbook.isActive) {
             throw new NotFoundError('Cashbook');
         }
+        assertCashbookWritable(cashbook);
 
         const entryDate = new Date(dto.entryDate);
 
@@ -566,6 +568,7 @@ export class EntriesService {
         if (!cashbook) {
             throw new NotFoundError('Cashbook');
         }
+        assertCashbookWritable(cashbook);
 
         // Backdate check for new date
         if (dto.entryDate) {
@@ -1232,6 +1235,7 @@ export class EntriesService {
         if (!cashbook) {
             throw new NotFoundError('Cashbook');
         }
+        assertCashbookWritable(cashbook);
 
         // Unlocked probe, used only to select wallet locks; see updateEntry. The
         // re-read after locking below is what catches a link that changed in
@@ -1834,9 +1838,10 @@ export class EntriesService {
 
         const source = await this.prisma.cashbook.findUnique({
             where: { id: entry.cashbookId },
-            select: { id: true, name: true, workspaceId: true, currency: true },
+            select: { id: true, name: true, workspaceId: true, currency: true, archivedAt: true },
         });
         if (!source) throw new NotFoundError('Cashbook');
+        assertCashbookWritable(source);
 
         if (dto.targetCashbookId === source.id) {
             throw new AppError('That entry is already in this book.', 400, 'SAME_CASHBOOK');
@@ -1974,11 +1979,15 @@ export class EntriesService {
     private async assertCanPostToCashbook(cashbookId: string, workspaceId: string, userId: string) {
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: cashbookId },
-            select: { id: true, name: true, workspaceId: true, isActive: true, currency: true },
+            select: {
+                id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                archivedAt: true,
+            },
         });
         if (!cashbook || !cashbook.isActive || cashbook.workspaceId !== workspaceId) {
             throw new NotFoundError('Cashbook');
         }
+        assertCashbookWritable(cashbook);
 
         const orgRole = await resolveWorkspaceRole(this.prisma, workspaceId, userId);
         if (hasWorkspacePermission(orgRole, WorkspacePermission.ACCESS_ALL_CASHBOOKS)) {

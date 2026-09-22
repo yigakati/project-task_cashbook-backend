@@ -37,7 +37,36 @@ export class CashbooksService {
         @inject('PrismaClient') private prisma: PrismaClient,
     ) { }
 
-    async getCashbooks(workspaceId: string, userId: string, workspaceRole?: WorkspaceRole | null) {
+    /**
+     * Whether each book can still be deleted, and how much history it holds.
+     *
+     * Deleting is only for a book that never recorded anything, so the
+     * question is whether any entry exists at all — including ones since
+     * deleted, because a reversed or removed entry is still this book's
+     * history. One grouped query answers it for the whole list.
+     */
+    private async withDeletability<T extends { id: string }>(cashbooks: T[]) {
+        if (cashbooks.length === 0) return [];
+
+        const counts = await this.prisma.entry.groupBy({
+            by: ['cashbookId'],
+            where: { cashbookId: { in: cashbooks.map((c) => c.id) } },
+            _count: { _all: true },
+        });
+        const byId = new Map(counts.map((c) => [c.cashbookId, c._count._all]));
+
+        return cashbooks.map((cashbook) => {
+            const totalEntries = byId.get(cashbook.id) ?? 0;
+            return { ...cashbook, totalEntries, canDelete: totalEntries === 0 };
+        });
+    }
+
+    async getCashbooks(
+        workspaceId: string,
+        userId: string,
+        workspaceRole?: WorkspaceRole | null,
+        includeArchived = false,
+    ) {
         // Check workspace type
         const workspace = await this.prisma.workspace.findUnique({
             where: { id: workspaceId },
@@ -49,7 +78,9 @@ export class CashbooksService {
 
         // Personal workspace: return all cashbooks (single owner)
         if (workspace.type === WorkspaceType.PERSONAL) {
-            return this.cashbooksRepository.findByWorkspaceId(workspaceId);
+            return this.withDeletability(
+                await this.cashbooksRepository.findByWorkspaceId(workspaceId, includeArchived),
+            );
         }
 
         // Owners, admins and accountants reach every book without an explicit
@@ -57,12 +88,18 @@ export class CashbooksService {
         // of them, so listing only their joined books would show an empty page
         // for books they can in fact open.
         if (hasWorkspacePermission(workspaceRole, WorkspacePermission.ACCESS_ALL_CASHBOOKS)) {
-            return this.cashbooksRepository.findByWorkspaceId(workspaceId);
+            return this.withDeletability(
+                await this.cashbooksRepository.findByWorkspaceId(workspaceId, includeArchived),
+            );
         }
 
         // Everyone else — members and sub-accountants — sees only what they
         // have been assigned to.
-        return this.cashbooksRepository.findUserAccessibleCashbooks(workspaceId, userId);
+        return this.withDeletability(
+            await this.cashbooksRepository.findUserAccessibleCashbooks(
+                workspaceId, userId, includeArchived,
+            ),
+        );
     }
 
     async getCashbook(cashbookId: string) {
@@ -70,7 +107,8 @@ export class CashbooksService {
         if (!cashbook || !cashbook.isActive) {
             throw new NotFoundError('Cashbook');
         }
-        return cashbook;
+        const [decorated] = await this.withDeletability([cashbook]);
+        return decorated;
     }
 
     async createCashbook(workspaceId: string, userId: string, dto: CreateCashbookDto) {
@@ -232,10 +270,64 @@ export class CashbooksService {
         return updated;
     }
 
+    /**
+     * Archive a book, or restore an archived one.
+     *
+     * This is how a book that has recorded anything is retired: it keeps every
+     * entry, leaves the active list, refuses new entries, and can be brought
+     * back. Deleting is reserved for a book that never recorded anything.
+     */
+    async setArchived(cashbookId: string, userId: string, archive: boolean) {
+        const cashbook = await this.cashbooksRepository.findById(cashbookId);
+        if (!cashbook || !cashbook.isActive) {
+            throw new NotFoundError('Cashbook');
+        }
+
+        // Already where the caller wants it: no write, and no second audit row
+        // claiming it was archived twice.
+        if (Boolean(cashbook.archivedAt) === archive) {
+            const [unchanged] = await this.withDeletability([cashbook]);
+            return unchanged;
+        }
+
+        const updated = await this.cashbooksRepository.update(cashbookId, {
+            archivedAt: archive ? new Date() : null,
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                userId,
+                workspaceId: cashbook.workspaceId,
+                action: archive ? AuditAction.CASHBOOK_ARCHIVED : AuditAction.CASHBOOK_UNARCHIVED,
+                resource: 'cashbook',
+                resourceId: cashbookId,
+                details: { name: cashbook.name } as any,
+            },
+        });
+
+        const [decorated] = await this.withDeletability([updated]);
+        return decorated;
+    }
+
     async deleteCashbook(cashbookId: string, userId: string) {
         const cashbook = await this.cashbooksRepository.findById(cashbookId);
         if (!cashbook || !cashbook.isActive) {
             throw new NotFoundError('Cashbook');
+        }
+
+        // A book that has recorded anything is archived, never deleted — its
+        // entries are financial history, and the ledger, invoices and
+        // obligations that reference them stay pointing at it. Entries since
+        // deleted still count: a reversed entry is part of that history.
+        const totalEntries = await this.prisma.entry.count({ where: { cashbookId } });
+        if (totalEntries > 0) {
+            throw new AppError(
+                `"${cashbook.name}" has ${totalEntries} ${totalEntries === 1 ? 'entry' : 'entries'}, `
+                + 'so it cannot be deleted. Archive it instead — it keeps its history, leaves your '
+                + 'active books, and can be restored.',
+                400,
+                'DELETE_RESTRICTED',
+            );
         }
 
         await this.cashbooksRepository.softDelete(cashbookId);

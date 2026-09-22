@@ -230,7 +230,12 @@ export class AccountsService {
             }
 
             if (account.balance.toNumber() !== 0 && data.archive) {
-                throw new AppError('Cannot archive an account with a non-zero balance.', 400, 'ARCHIVE_RESTRICTED');
+                throw new AppError(
+                    `"${account.name}" still holds ${account.balance.toString()} ${account.currency}. `
+                    + 'Move the balance to another account first, then archive it.',
+                    400,
+                    'ARCHIVE_RESTRICTED',
+                );
             }
 
             const updated = await tx.account.update({
@@ -265,13 +270,31 @@ export class AccountsService {
                 throw new NotFoundError('Account');
             }
 
-            // Prevent deletion if transactions exist
-            const transactionsCount = await tx.accountTransaction.count({
-                where: { accountId: id }
-            });
+            // Everything that ties history to this account.
+            //
+            // Counting only transactions was not enough: a transfer writes an
+            // account_transfers row and a journal but no transaction row, and
+            // transfers, ticket sales and expense claims all hold the account
+            // with a restricting foreign key. An account whose only activity
+            // was a transfer therefore passed this check and then failed in
+            // the database, surfacing as an opaque 500 instead of telling the
+            // user to archive it.
+            const [transactions, transfersOut, transfersIn, ticketSales, expenseClaims] = await Promise.all([
+                tx.accountTransaction.count({ where: { accountId: id } }),
+                tx.accountTransfer.count({ where: { fromAccountId: id } }),
+                tx.accountTransfer.count({ where: { toAccountId: id } }),
+                tx.ticketSale.count({ where: { accountId: id } }),
+                tx.taskExpenseClaim.count({ where: { accountId: id } }),
+            ]);
+            const activity = transactions + transfersOut + transfersIn + ticketSales + expenseClaims;
 
-            if (transactionsCount > 0) {
-                throw new AppError('Cannot delete account because it has recorded transactions. Please archive it instead.', 400, 'DELETE_RESTRICTED');
+            if (activity > 0) {
+                throw new AppError(
+                    `"${account.name}" has recorded activity, so it cannot be deleted. Archive it `
+                    + 'instead — it keeps its history and drops out of your totals.',
+                    400,
+                    'DELETE_RESTRICTED',
+                );
             }
 
             await tx.account.delete({ where: { id } });

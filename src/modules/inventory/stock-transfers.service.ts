@@ -4,6 +4,7 @@ import {
     InventoryReferenceType, NotificationType, NotificationEntityType, WorkspaceType,
 } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { assertCashbookWritable } from '../cashbooks/cashbook-state';
 import { NotFoundError, AppError, AuthorizationError } from '../../core/errors/AppError';
 import { AuditAction } from '../../core/types';
 import { withFinancialTransaction } from '../../core/db/transaction';
@@ -552,6 +553,7 @@ export class StockTransfersService {
 
         const cashbook = await this.prisma.cashbook.findUnique({ where: { id: dto.cashbookId } });
         if (!cashbook || !cashbook.isActive) throw new NotFoundError('Cashbook');
+        assertCashbookWritable(cashbook);
         if (cashbook.workspaceId !== recipientWorkspaceId) {
             throw new AppError(
                 'The stock cost can only be recorded in the workspace that received it',
@@ -651,6 +653,7 @@ export class StockTransfersService {
 
         const cashbook = await this.prisma.cashbook.findUnique({ where: { id: dto.cashbookId } });
         if (!cashbook || !cashbook.isActive) throw new NotFoundError('Cashbook');
+        assertCashbookWritable(cashbook);
         if (cashbook.workspaceId !== senderWorkspaceId) {
             throw new AppError(
                 'The stock income can only be recorded in the vendor workspace that sent it',
