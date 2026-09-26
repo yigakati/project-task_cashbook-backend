@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { Prisma, PrismaClient, TransactionSourceType, InventoryReferenceType } from '@prisma/client';
+import { Prisma, PrismaClient, TransactionSourceType, InventoryReferenceType, EntryStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { EntriesRepository } from './entries.repository';
 import { assertCashbookWritable } from '../cashbooks/cashbook-state';
@@ -37,6 +37,7 @@ import {
     // balance writes themselves now come from the ledger.
     walletBalanceDelta,
 } from '../../core/finance';
+import { cashbookBalanceDelta } from '../../core/finance/money';
 import { withFinancialTransaction } from '../../core/db/transaction';
 import { acquireLocks } from '../../core/db/locks';
 import { assertPeriodOpen, resolveReversalDate } from '../../core/ledger/period';
@@ -62,19 +63,24 @@ export class EntriesService {
 
     // ─── List Entries ──────────────────────────────────
     async getEntries(cashbookId: string, query: EntryQueryDto) {
-        const { entries, total } = await this.entriesRepository.findByCashbookId(cashbookId, {
+        const { entries, total, totals } = await this.entriesRepository.findByCashbookId(cashbookId, {
             page: query.page,
             limit: query.limit,
             type: query.type,
             categoryId: query.categoryId,
             contactId: query.contactId,
             paymentModeId: query.paymentModeId,
+            memberId: query.memberId,
+            accountId: query.accountId,
+            search: query.search,
             startDate: query.startDate,
             endDate: query.endDate,
             sortBy: query.sortBy,
             sortOrder: query.sortOrder,
             includeReversed: query.includeReversed,
         });
+
+        const runningBalances = await this.runningBalances(cashbookId, entries, query);
 
         const totalPages = Math.ceil(total / query.limit);
 
@@ -101,6 +107,7 @@ export class EntriesService {
                 ...rest,
                 account: accountTransactions?.[0]?.account || null,
                 inventoryItems: invMap.get(entry.id) || [],
+                runningBalance: runningBalances.balances?.get(entry.id) ?? null,
             };
         });
 
@@ -114,6 +121,229 @@ export class EntriesService {
                 hasNext: query.page < totalPages,
                 hasPrevious: query.page > 1,
             },
+            summary: this.summarise(totals),
+            runningBalance: {
+                available: runningBalances.balances !== null,
+                reason: runningBalances.reason,
+            },
+        };
+    }
+
+    /**
+     * Money in, money out and net across every entry the filters match.
+     *
+     * Summed the way the book's own totals are kept (see incomeExpenseDeltas):
+     * a charge on money received counts as money out. So with no filters these
+     * equal the book's cards, and with filters they are the same measure over
+     * the narrower set.
+     */
+    private summarise(
+        totals: Array<{
+            type: string;
+            _sum: { amount: Prisma.Decimal | null; chargeAmount: Prisma.Decimal | null };
+            _count: { _all: number };
+        }>,
+    ) {
+        let moneyIn = new Decimal(0);
+        let moneyOut = new Decimal(0);
+        let count = 0;
+
+        for (const row of totals) {
+            const amount = new Decimal(row._sum.amount ?? 0);
+            const charge = new Decimal(row._sum.chargeAmount ?? 0);
+            count += row._count._all;
+            if (row.type === 'INCOME') {
+                moneyIn = moneyIn.add(amount);
+                moneyOut = moneyOut.add(charge);
+            } else {
+                moneyOut = moneyOut.add(amount).add(charge);
+            }
+        }
+
+        return {
+            moneyIn: moneyIn.toString(),
+            moneyOut: moneyOut.toString(),
+            net: moneyIn.sub(moneyOut).toString(),
+            count,
+        };
+    }
+
+    /**
+     * The book's cash balance after each entry on this page.
+     *
+     * Computed here because the page only holds one slice of the book. It used
+     * to be summed in the browser from zero across whatever had been fetched —
+     * which was only ever the newest 20 entries — so every row's balance was
+     * wrong once a book outgrew one page.
+     *
+     * The opening figure is the sum of every live entry that comes before this
+     * page's oldest entry in book order (entryDate, then createdAt, then id —
+     * the same total order the list is sorted by), and the page is walked
+     * forward from there. Wallet-linked and reversed entries move nothing, as
+     * in the book balance itself.
+     *
+     * Offered only where it means something. Filtering by type, person, wallet
+     * or text shows a subset: a running balance down those rows would jump by
+     * amounts that are not on screen. A date range is fine — that is an
+     * ordinary statement with an opening balance. So is sorting by date; not
+     * by amount.
+     */
+    private async runningBalances(
+        cashbookId: string,
+        entries: Array<{
+            id: string;
+            type: string;
+            amount: Prisma.Decimal;
+            chargeAmount: Prisma.Decimal | null;
+            status: string;
+            accountTransactions: unknown[];
+        }>,
+        query: EntryQueryDto,
+    ): Promise<{ balances: Map<string, string> | null; reason: string | null }> {
+        const subset = query.type || query.memberId || query.accountId || query.search
+            || query.categoryId || query.contactId || query.paymentModeId;
+        if (subset) {
+            return { balances: null, reason: 'A running balance is not shown while entries are filtered to a subset.' };
+        }
+        if (query.sortBy !== 'entryDate') {
+            return { balances: null, reason: 'A running balance is only shown when entries are in date order.' };
+        }
+        if (entries.length === 0) return { balances: new Map(), reason: null };
+
+        const chronological = query.sortOrder === 'asc' ? entries : [...entries].reverse();
+        const oldest = chronological[0];
+
+        // Only the pivot's id crosses into SQL: its dates are read back in the
+        // same statement, so no timestamp is re-interpreted through a timezone.
+        const [row] = await this.prisma.$queryRaw<Array<{ opening: Prisma.Decimal | null }>>`
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM account_transactions t
+                        WHERE t.source_id = e.id AND t.voided_at IS NULL
+                    ) THEN 0
+                    WHEN e.type = 'INCOME' THEN e.amount - COALESCE(e.charge_amount, 0)
+                    ELSE -(e.amount + COALESCE(e.charge_amount, 0))
+                END
+            ), 0) AS opening
+            FROM entries e
+            WHERE e.cashbook_id = ${cashbookId}::uuid
+              AND e.status = 'POSTED'
+              AND (e.entry_date, e.created_at, e.id) < (
+                  SELECT p.entry_date, p.created_at, p.id FROM entries p WHERE p.id = ${oldest.id}::uuid
+              )`;
+
+        let balance = new Decimal(row?.opening ?? 0);
+        const balances = new Map<string, string>();
+        for (const entry of chronological) {
+            if (entry.status === EntryStatus.POSTED) {
+                balance = balance.add(cashbookBalanceDelta(
+                    entry.type,
+                    entry.amount,
+                    entry.chargeAmount,
+                    entry.accountTransactions.length > 0,
+                ));
+            }
+            balances.set(entry.id, balance.toString());
+        }
+
+        return { balances, reason: null };
+    }
+
+    /**
+     * Who and what the entry list can be filtered by.
+     *
+     * People: everyone who has posted in this book, plus everyone who can reach
+     * it — its members, and org roles that see every book (owner, admin,
+     * accountant). Someone who posted and has since lost access still appears:
+     * their entries are still here. The roster of people who have not posted
+     * is only included for a viewer allowed to see the book's members, so the
+     * filter can never become a way round that permission.
+     *
+     * Wallets: only those this book's entries actually went through, and
+     * whether any entry went through none.
+     */
+    async getEntryFilterOptions(cashbookId: string, includeRoster: boolean) {
+        const cashbook = await this.prisma.cashbook.findUnique({
+            where: { id: cashbookId },
+            select: { workspaceId: true, workspace: { select: { type: true, ownerId: true } } },
+        });
+        if (!cashbook) throw new NotFoundError('Cashbook');
+
+        const live: Prisma.EntryWhereInput = { cashbookId, status: EntryStatus.POSTED };
+        const isPersonal = cashbook.workspace.type === 'PERSONAL';
+
+        const [byPoster, byWallet, bookCashCount, bookMembers, orgMembers] = await Promise.all([
+            this.prisma.entry.groupBy({ by: ['createdById'], where: live, _count: { _all: true } }),
+            this.prisma.accountTransaction.groupBy({
+                by: ['accountId'],
+                where: { voidedAt: null, sourceEntry: { is: live } },
+                _count: { _all: true },
+            }),
+            this.prisma.entry.count({ where: { ...live, accountTransactions: { none: { voidedAt: null } } } }),
+            this.prisma.cashbookMember.findMany({ where: { cashbookId }, select: { userId: true, role: true } }),
+            isPersonal
+                ? Promise.resolve([] as Array<{ userId: string; role: string }>)
+                : this.prisma.workspaceMember.findMany({
+                    where: { workspaceId: cashbook.workspaceId },
+                    select: { userId: true, role: true },
+                }),
+        ]);
+
+        // Who can reach the book, and through which role.
+        const access = new Map<string, string>();
+        access.set(cashbook.workspace.ownerId, 'OWNER');
+        for (const member of orgMembers) {
+            if (hasWorkspacePermission(member.role as never, WorkspacePermission.ACCESS_ALL_CASHBOOKS)) {
+                access.set(member.userId, member.role);
+            }
+        }
+        // An explicit book role is the more specific answer, so it wins.
+        for (const member of bookMembers) access.set(member.userId, member.role);
+
+        const counts = new Map(byPoster.map((row) => [row.createdById, row._count._all]));
+        const userIds = [...new Set([
+            ...counts.keys(),
+            ...(includeRoster ? access.keys() : []),
+        ])];
+
+        const [users, accounts] = await Promise.all([
+            this.prisma.user.findMany({
+                where: { id: { in: userIds } },
+                select: { id: true, firstName: true, lastName: true, email: true },
+            }),
+            this.prisma.account.findMany({
+                where: { id: { in: byWallet.map((row) => row.accountId) } },
+                select: { id: true, name: true, archivedAt: true },
+            }),
+        ]);
+
+        const walletCounts = new Map(byWallet.map((row) => [row.accountId, row._count._all]));
+        const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+
+        const members = users
+            .map((user) => ({
+                id: user.id,
+                name: `${user.firstName} ${user.lastName}`.trim() || user.email,
+                email: user.email,
+                role: access.get(user.id) ?? null,
+                hasAccess: access.has(user.id),
+                entryCount: counts.get(user.id) ?? 0,
+            }))
+            // Most active first; the filter is for finding whose entries these are.
+            .sort((a, b) => b.entryCount - a.entryCount || byName(a, b));
+
+        return {
+            members,
+            accounts: accounts
+                .map((account) => ({
+                    id: account.id,
+                    name: account.name,
+                    archived: account.archivedAt !== null,
+                    entryCount: walletCounts.get(account.id) ?? 0,
+                }))
+                .sort((a, b) => b.entryCount - a.entryCount || byName(a, b)),
+            bookCashEntryCount: bookCashCount,
         };
     }
 

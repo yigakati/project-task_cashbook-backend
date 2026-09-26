@@ -3,6 +3,7 @@ import { Response, NextFunction } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { EntriesService } from './entries.service';
 import { AuthenticatedRequest, ApiResponse, CashbookRole } from '../../core/types';
+import { CashbookPermission, hasPermission } from '../../core/types/permissions';
 
 @injectable()
 export class EntriesController {
@@ -16,6 +17,22 @@ export class EntriesController {
                 message: 'Entries retrieved successfully',
                 ...result,
             });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async filterOptions(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            // Only someone who may see the book's members gets its full roster;
+            // everyone else sees just the people whose entries they can see.
+            const role = (req as { cashbookRole?: CashbookRole }).cashbookRole;
+            const includeRoster = !!role && hasPermission(role, CashbookPermission.VIEW_MEMBERS);
+            const data = await this.entriesService.getEntryFilterOptions(
+                req.params.cashbookId as string,
+                includeRoster,
+            );
+            res.status(StatusCodes.OK).json({ success: true, message: 'Filter options retrieved', data });
         } catch (error) {
             next(error);
         }

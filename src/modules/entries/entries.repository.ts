@@ -42,6 +42,10 @@ export class EntriesRepository {
             paymentModeId?: string;
             startDate?: string;
             endDate?: string;
+            memberId?: string;
+            /** A wallet id, or 'none' for entries that go through no wallet. */
+            accountId?: string;
+            search?: string;
             sortBy: string;
             sortOrder: string;
             /** Include reversed entries. Off by default, matching the old delete UX. */
@@ -71,6 +75,29 @@ export class EntriesRepository {
         if (filters.categoryId) where.categoryId = filters.categoryId;
         if (filters.contactId) where.contactId = filters.contactId;
         if (filters.paymentModeId) where.paymentModeId = filters.paymentModeId;
+        if (filters.memberId) where.createdById = filters.memberId;
+
+        // A wallet link is a live account_transactions row; a voided one is
+        // history and no longer ties the entry to that wallet.
+        if (filters.accountId === 'none') {
+            where.accountTransactions = { none: { voidedAt: null } };
+        } else if (filters.accountId) {
+            where.accountTransactions = { some: { accountId: filters.accountId, voidedAt: null } };
+        }
+
+        if (filters.search) {
+            const q = filters.search;
+            const anyOf: Prisma.EntryWhereInput[] = [
+                { description: { contains: q, mode: 'insensitive' } },
+                { contact: { name: { contains: q, mode: 'insensitive' } } },
+                { category: { name: { contains: q, mode: 'insensitive' } } },
+                { paymentMode: { name: { contains: q, mode: 'insensitive' } } },
+            ];
+            // "25,000" and "25000" both find an entry of 25000.
+            const numeric = q.replace(/,/g, '');
+            if (/^\d+(\.\d+)?$/.test(numeric)) anyOf.push({ amount: { equals: numeric } });
+            where.OR = anyOf;
+        }
 
         if (filters.startDate || filters.endDate) {
             where.entryDate = {};
@@ -78,7 +105,15 @@ export class EntriesRepository {
             if (filters.endDate) where.entryDate.lte = new Date(filters.endDate);
         }
 
-        const [entries, total] = await Promise.all([
+        // Tie-breakers make the order total. Ordering by entryDate alone left
+        // same-day entries in no defined order, so paging could show one twice
+        // and skip another.
+        const direction: Prisma.SortOrder = sortOrder === 'asc' ? 'asc' : 'desc';
+        const orderBy: Prisma.EntryOrderByWithRelationInput[] = sortBy === 'createdAt'
+            ? [{ createdAt: direction }, { id: direction }]
+            : [{ [sortBy]: direction }, { createdAt: direction }, { id: direction }];
+
+        const [entries, total, totals] = await Promise.all([
             this.prisma.entry.findMany({
                 where,
                 include: {
@@ -104,12 +139,22 @@ export class EntriesRepository {
                 },
                 skip: (page - 1) * limit,
                 take: limit,
-                orderBy: { [sortBy]: sortOrder },
+                orderBy,
             }),
             this.prisma.entry.count({ where }),
+            // Totals across every matching entry, not just this page. Reversed
+            // entries never count, even when they are being shown: a reversal
+            // cancels its original, which is exactly how the book's own totals
+            // treat it.
+            this.prisma.entry.groupBy({
+                by: ['type'],
+                where: { ...where, status: EntryStatus.POSTED },
+                _sum: { amount: true, chargeAmount: true },
+                _count: { _all: true },
+            }),
         ]);
 
-        return { entries, total };
+        return { entries, total, totals };
     }
 
     async createEntryAudit(data: {

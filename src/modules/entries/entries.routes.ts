@@ -40,6 +40,13 @@ router.get(
     entriesController.getAll.bind(entriesController) as any
 );
 
+// Who and what the book's entries can be filtered by.
+router.get(
+    '/cashbook/:cashbookId/filter-options',
+    requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
+    entriesController.filterOptions.bind(entriesController) as any
+);
+
 router.get(
     '/:entryId/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,

@@ -79,20 +79,41 @@ export const reviewDeleteRequestSchema = z.object({
     reviewNote: z.string().max(500).optional(),
 });
 
+/**
+ * A boolean read from a query string.
+ *
+ * Not `z.coerce.boolean()`: that runs `Boolean(value)`, and every non-empty
+ * string is truthy, so `?includeReversed=false` parsed as TRUE. The client
+ * sends exactly that on every request, which meant reversed entries were
+ * always included and the "show reversed" toggle did nothing.
+ */
+const queryBoolean = z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .transform((value) => value === true || value === 'true' || value === '1');
+
 export const entryQuerySchema = z.object({
-    page: z.coerce.number().min(1).default(1),
-    limit: z.coerce.number().min(1).max(100).default(20),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
     type: z.enum(['INCOME', 'EXPENSE']).optional(),
     categoryId: z.string().uuid().optional(),
     contactId: z.string().uuid().optional(),
     paymentModeId: z.string().uuid().optional(),
+    /** Only entries this person posted. */
+    memberId: z.string().uuid().optional(),
+    /** Only entries through this wallet — or `none` for book cash, no wallet. */
+    accountId: z.union([z.string().uuid(), z.literal('none')]).optional(),
+    /** Description, contact, category, payment mode, or an exact amount. */
+    search: z.string().trim().max(100).optional().transform((value) => value || undefined),
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
     sortBy: z.enum(['entryDate', 'amount', 'createdAt']).default('entryDate'),
     sortOrder: z.enum(['asc', 'desc']).default('desc'),
     /** Show reversed entries alongside live ones. Default false. */
-    includeReversed: z.coerce.boolean().default(false),
-});
+    includeReversed: queryBoolean.default(false),
+}).refine(
+    (q) => !q.startDate || !q.endDate || new Date(q.startDate) <= new Date(q.endDate),
+    { message: 'The start date must be on or before the end date', path: ['endDate'] },
+);
 
 // Integration-only provenance is intentionally not part of the public UI
 // schema. Manual create requests still pass createEntrySchema, while trusted
