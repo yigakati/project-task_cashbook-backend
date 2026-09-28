@@ -151,7 +151,7 @@ export function invoiceEmailTemplate(params: {
         logoUrl,
     } = params;
 
-    const FALLBACK_LOGO = 'https://inchange.odixtec.net/reportlogo.svg';
+    const FALLBACK_LOGO = 'https://inchange.odixtec.com/reportlogo.svg';
     const logo = logoUrl || FALLBACK_LOGO;
 
     const itemRows = itemsSummary
@@ -332,7 +332,7 @@ export function receiptEmailTemplate(params: {
     } = params;
     
     // Use fallback logo if none provided
-    const _logoUrl = logoUrl || 'https://inchange.odixtec.net/reportlogo.svg';
+    const _logoUrl = logoUrl || 'https://inchange.odixtec.com/reportlogo.svg';
 
     return `<!DOCTYPE html>
     <html>
@@ -417,7 +417,7 @@ export function receiptEmailTemplate(params: {
             <!-- Footer Area (Dark) -->
             <tr>
                 <td style="background-color: #1f2937; padding: 22px 36px; text-align: center;">
-                    <img src="https://inchange.odixtec.net/reportlogo.svg" alt="Odixtec Logo" style="height: 20px; opacity: 0.7; margin-bottom: 12px;">
+                    <img src="https://inchange.odixtec.com/reportlogo.svg" alt="Odixtec Logo" style="height: 20px; opacity: 0.7; margin-bottom: 12px;">
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
                         Powered by ${config.APP_NAME}
                     </p>

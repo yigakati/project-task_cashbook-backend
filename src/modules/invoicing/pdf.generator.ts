@@ -13,7 +13,7 @@ import { StorageService } from '../files/storage.service';
  * This is tried when no business logo has been uploaded yet.
  * In production, point this to an absolute HTTPS URL.
  */
-const FALLBACK_LOGO_URL = 'https://inchange.odixtec.net/logo.png';
+const FALLBACK_LOGO_URL = 'https://inchange.odixtec.com/logo.png';
 
 const PAGE_WIDTH    = 595.28;              // A4 width  (pt)
 const PAGE_HEIGHT   = 841.89;             // A4 height (pt)

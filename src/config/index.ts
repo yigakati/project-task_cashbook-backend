@@ -80,7 +80,7 @@ const envSchema = z.object({
      */
     Client_ID: z.string().default(''),
     Client_Secret: z.string().default(''),
-    OC_BASE_URL: z.string().url().default('https://oc.odixtec.net'),
+    OC_BASE_URL: z.string().url().default('https://oc.odixtec.com'),
     /**
      * The one redirect URI registered against this OC OAuth app. OC's
      * dashboard takes redirect URIs at app-creation time as a fixed list, not
@@ -88,7 +88,7 @@ const envSchema = z.object({
      * we accept from the frontend, only a value the server supplies itself
      * when exchanging a code. See auth.service.ts#ocLogin.
      */
-    OC_REDIRECT_URI: z.string().url().default('https://inchange.odixtec.net/auth/callback'),
+    OC_REDIRECT_URI: z.string().url().default('https://inchange.odixtec.com/auth/callback'),
 
     /**
      * Where the frontend lives, for links that land in someone's inbox — a
@@ -98,7 +98,7 @@ const envSchema = z.object({
      * using it as an href (as some older templates do) renders every origin
      * joined together into one broken link.
      */
-    APP_URL: z.string().url().default('https://inchange.odixtec.net'),
+    APP_URL: z.string().url().default('https://inchange.odixtec.com'),
 
     /**
      * This API's own externally reachable base URL.

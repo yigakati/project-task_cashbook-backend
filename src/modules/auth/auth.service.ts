@@ -1141,7 +1141,7 @@ export class AuthService {
     }
 
     async connectOc(userId: string, dto: OcLoginDto, ipAddress?: string, userAgent?: string) {
-        const OC_BASE = 'https://oc.odixtec.net';
+        const OC_BASE = 'https://oc.odixtec.com';
         
         let tokenData: any;
         try {
