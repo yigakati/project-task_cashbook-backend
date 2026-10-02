@@ -122,8 +122,8 @@ export class PlatformService {
     async getStats() {
         const [users, activeUsers, workspaces, cashbooks, entries, journals, reversedEntries] =
             await Promise.all([
-                this.prisma.user.count(),
-                this.prisma.user.count({ where: { isActive: true } }),
+                this.prisma.user.count({ where: { deletedAt: null } }),
+                this.prisma.user.count({ where: { isActive: true, deletedAt: null } }),
                 this.prisma.workspace.count({ where: { isActive: true } }),
                 this.prisma.cashbook.count({ where: { isActive: true } }),
                 this.prisma.entry.count({ where: { status: 'POSTED' } }),
@@ -142,15 +142,18 @@ export class PlatformService {
 
     async listUsers(params: { page: number; limit: number; search?: string }) {
         const skip = (params.page - 1) * params.limit;
-        const where = params.search
-            ? {
+        // Deleted accounts are anonymised tombstones, not users; they are
+        // visible under Account deletions instead.
+        const where = {
+            deletedAt: null,
+            ...(params.search && {
                 OR: [
                     { email: { contains: params.search, mode: 'insensitive' as const } },
                     { firstName: { contains: params.search, mode: 'insensitive' as const } },
                     { lastName: { contains: params.search, mode: 'insensitive' as const } },
                 ],
-            }
-            : {};
+            }),
+        };
 
         const [total, data] = await Promise.all([
             this.prisma.user.count({ where }),

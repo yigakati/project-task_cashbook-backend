@@ -5,6 +5,8 @@ import {
     EmailNotVerifiedError,
     WorkspaceProfileIncompleteError,
     StorageQuotaExceededError,
+    AccountDeletionBlockedError,
+    type AccountDeletionBlocker,
 } from '../core/errors/AppError';
 import { logger } from '../utils/logger';
 import { config } from '../config';
@@ -24,6 +26,7 @@ export function errorHandler(
             missing?: string[];
             usedBytes?: number;
             limitBytes?: number;
+            blockers?: AccountDeletionBlocker[];
         } = {
             success: false,
             message: err.message,
@@ -46,6 +49,10 @@ export function errorHandler(
             ...(err instanceof StorageQuotaExceededError && {
                 usedBytes: err.usedBytes,
                 limitBytes: err.limitBytes,
+            }),
+            // What stands in the way, so the client can say what to fix.
+            ...(err instanceof AccountDeletionBlockedError && {
+                blockers: err.blockers,
             }),
         };
 

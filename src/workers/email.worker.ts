@@ -8,6 +8,7 @@ export interface EmailJobData {
     to: string;
     subject: string;
     html: string;
+    replyTo?: string;
     attachments?: Array<{
         filename: string;
         content: string; // base64-encoded
@@ -23,7 +24,7 @@ export function createEmailWorker(): Worker<EmailJobData> {
     const worker = new Worker<EmailJobData>(
         'email',
         async (job: Job<EmailJobData>) => {
-            const { to, subject, html, attachments } = job.data;
+            const { to, subject, html, replyTo, attachments } = job.data;
 
             logger.info('Processing email job', { jobId: job.id, to, subject });
 
@@ -50,6 +51,7 @@ export function createEmailWorker(): Worker<EmailJobData> {
                 to,
                 subject,
                 html,
+                replyTo,
                 attachments: mailAttachments,
             });
 

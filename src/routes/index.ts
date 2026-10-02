@@ -13,6 +13,11 @@ import {
 } from '../modules/contact-links/contact-links.routes';
 import referralsRoutes from '../modules/referrals/referrals.routes';
 import { storageWorkspaceRouter } from '../modules/storage/storage.routes';
+import {
+    accountDeletionMeRouter,
+    accountDeletionPublicRouter,
+} from '../modules/account-deletion/account-deletion.routes';
+import { supportPublicRouter } from '../modules/support/support.routes';
 import paymentModesRoutes from '../modules/payment-modes/payment-modes.routes';
 import filesRoutes from '../modules/files/files.routes';
 import reportsRoutes from '../modules/reports/reports.routes';
@@ -53,6 +58,8 @@ const router = Router();
 
 // API v1 routes
 router.use('/auth', authRoutes);
+// Before /users so /users/me/deletion is not swallowed by the users router.
+router.use('/users/me/deletion', accountDeletionMeRouter);
 router.use('/users', usersRoutes);
 router.use('/workspaces', workspacesRoutes);
 router.use('/workspaces/:workspaceId/members', membersRoutes);
@@ -111,6 +118,12 @@ router.use('/workspaces/:workspaceId/obligations', workspaceObligationsRouter);
 // ─── Developer API Keys ───────────────────────────────
 // Scoped to a workspace; requires MANAGE_API_KEYS permission (see api-keys.routes.ts).
 router.use('/workspaces/:workspaceId/api-keys', apiKeysRoutes);
+
+// ─── Public, signed out ───────────────────────────────
+// Deleting an account without the app (required by app stores), and the
+// contact form. Both rate-limited per IP in their routers.
+router.use('/account-deletion', accountDeletionPublicRouter);
+router.use('/support', supportPublicRouter);
 
 // ─── Invoice logos (no session) ───────────────────────
 // Printed on invoices and embedded in the emails they are sent in, so a

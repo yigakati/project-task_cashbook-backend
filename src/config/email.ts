@@ -69,6 +69,8 @@ export interface EmailOptions {
     to: string;
     subject: string;
     html: string;
+    /** Where replies go, e.g. the person who used the contact form. */
+    replyTo?: string;
     attachments?: Array<{
         filename: string;
         content: Buffer;
@@ -102,6 +104,7 @@ export async function sendEmail(options: EmailOptions): Promise<void> {
             to: options.to,
             subject: options.subject,
             html: options.html,
+            ...(options.replyTo && { replyTo: options.replyTo }),
         });
 
         logger.info('Email queued successfully', { to: options.to, subject: options.subject });
@@ -135,6 +138,7 @@ export async function sendEmailDirect(options: EmailOptions): Promise<void> {
             to: options.to,
             subject: options.subject,
             html: options.html,
+            replyTo: options.replyTo,
             attachments: options.attachments,
         });
         logger.info('Email sent directly', { to: options.to, subject: options.subject });

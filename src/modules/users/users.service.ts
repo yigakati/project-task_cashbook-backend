@@ -24,13 +24,19 @@ export class UsersService {
         // Platform-wide switches the client needs in order to show the right
         // actions. Carried on the profile it already loads, so gating a button
         // costs no extra request — and the endpoints enforce them regardless.
-        const manualContactsEnabled = await isPlatformSettingEnabled(
-            this.prisma, PLATFORM_SETTINGS.MANUAL_CONTACTS,
-        );
+        const [manualContactsEnabled, pendingDeletion] = await Promise.all([
+            isPlatformSettingEnabled(this.prisma, PLATFORM_SETTINGS.MANUAL_CONTACTS),
+            // Signing in during the grace period has to offer the way back.
+            this.prisma.accountDeletionRequest.findFirst({
+                where: { userId, status: { in: ['SCHEDULED', 'BLOCKED', 'PROCESSING'] } },
+                select: { id: true, status: true, scheduledFor: true },
+            }),
+        ]);
 
         return {
             ...this.toProfileResponse(user),
             platform: { manualContactsEnabled },
+            pendingDeletion,
         };
     }
 

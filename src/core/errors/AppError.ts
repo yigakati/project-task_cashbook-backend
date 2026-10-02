@@ -100,6 +100,30 @@ export class RateLimitError extends AppError {
     }
 }
 
+/** Something that has to be resolved before an account can be deleted. */
+export interface AccountDeletionBlocker {
+    code: 'SUPER_ADMIN' | 'OWNS_SHARED_WORKSPACE';
+    message: string;
+    workspaces?: Array<{ id: string; name: string; otherMembers: number }>;
+}
+
+/**
+ * The account cannot be deleted yet. Carries the reasons so the client can
+ * show the person exactly what to do, rather than a bare refusal.
+ */
+export class AccountDeletionBlockedError extends AppError {
+    public readonly blockers: AccountDeletionBlocker[];
+
+    constructor(blockers: AccountDeletionBlocker[]) {
+        super(
+            blockers.map((b) => b.message).join(' '),
+            StatusCodes.CONFLICT,
+            'ACCOUNT_DELETION_BLOCKED',
+        );
+        this.blockers = blockers;
+    }
+}
+
 /**
  * An upload that would take a workspace past its storage allowance.
  *

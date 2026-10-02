@@ -473,3 +473,103 @@ export function contactInviteSignupEmailTemplate(params: {
         </p>
     </div>`;
 }
+
+// ─── Account deletion ──────────────────────────────────
+
+const shell = (title: string, body: string) => `
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;">
+        <h2 style="color: #111827; margin-bottom: 8px;">${title}</h2>
+        ${body}
+    </div>`;
+
+const para = (text: string) =>
+    `<p style="color: #6b7280; font-size: 15px; line-height: 1.6;">${text}</p>`;
+
+const small = (text: string) =>
+    `<p style="color: #9ca3af; font-size: 13px; line-height: 1.6;">${text}</p>`;
+
+const button = (href: string, label: string) => `
+        <div style="text-align: center; margin: 28px 0;">
+            <a href="${href}" style="display: inline-block; padding: 12px 32px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;">${label}</a>
+        </div>`;
+
+const escapeHtml = (value: string) =>
+    value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const longDate = (date: Date) =>
+    date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+/** Sent to confirm a deletion asked for on the website, by someone not signed in. */
+export function accountDeletionVerifyEmailTemplate(params: {
+    firstName: string;
+    confirmUrl: string;
+    expiresInHours: number;
+}): string {
+    return shell('Confirm your account deletion', [
+        para(`Hi ${escapeHtml(params.firstName)}, we received a request on our website to delete your <strong>${config.APP_NAME}</strong> account.`),
+        para('If it was you, confirm below. Nothing happens until you do.'),
+        button(params.confirmUrl, 'Confirm account deletion'),
+        small(`This link expires in ${params.expiresInHours} hours. If you didn't ask for this, ignore this email — your account is safe and nothing will change.`),
+    ].join(''));
+}
+
+/** Sent the moment a deletion is scheduled, from any source. */
+export function accountDeletionScheduledEmailTemplate(params: {
+    firstName: string;
+    scheduledFor: Date;
+    signInUrl: string;
+}): string {
+    return shell('Your account is scheduled for deletion', [
+        para(`Hi ${escapeHtml(params.firstName)}, your <strong>${config.APP_NAME}</strong> account will be permanently deleted on <strong>${longDate(params.scheduledFor)}</strong>.`),
+        para('You have been signed out on every device. If you change your mind, sign in before that date and choose <strong>Cancel deletion</strong>.'),
+        button(params.signInUrl, 'Sign in to cancel'),
+        small('If you did not ask for this, sign in now, cancel the deletion and change your password.'),
+    ].join(''));
+}
+
+/** Sent when the person or support cancels a pending deletion. */
+export function accountDeletionCancelledEmailTemplate(params: { firstName: string }): string {
+    return shell('Account deletion cancelled', [
+        para(`Hi ${escapeHtml(params.firstName)}, the deletion of your <strong>${config.APP_NAME}</strong> account has been cancelled. Your account and everything in it stay exactly as they were.`),
+        small('If you did not cancel this yourself, contact support.'),
+    ].join(''));
+}
+
+/** Sent when a deletion cannot go ahead until something is resolved. */
+export function accountDeletionBlockedEmailTemplate(params: {
+    firstName: string;
+    reasons: string[];
+    signInUrl: string;
+}): string {
+    const list = params.reasons.map((r) => `<li style="margin-bottom: 6px;">${escapeHtml(r)}</li>`).join('');
+    return shell('Your account deletion is on hold', [
+        para(`Hi ${escapeHtml(params.firstName)}, we could not delete your <strong>${config.APP_NAME}</strong> account yet:`),
+        `<ul style="color: #6b7280; font-size: 15px; line-height: 1.6; padding-left: 20px;">${list}</ul>`,
+        para('Once that is resolved, sign in and request deletion again from your profile, or reply to support.'),
+        button(params.signInUrl, 'Sign in'),
+    ].join(''));
+}
+
+/** The last email: sent to the address the account had, after it is gone. */
+export function accountDeletionCompletedEmailTemplate(params: { firstName: string }): string {
+    return shell('Your account has been deleted', [
+        para(`Hi ${escapeHtml(params.firstName)}, your <strong>${config.APP_NAME}</strong> account has been deleted, together with your personal details and every workspace only you used.`),
+        small('Records that belong to businesses you worked in stay with those businesses, no longer linked to your name. This is the last email we will send to this address.'),
+    ].join(''));
+}
+
+/** Forwarded to the support inbox from the public contact page. */
+export function contactMessageEmailTemplate(params: {
+    name: string;
+    email: string;
+    category: string;
+    subject: string;
+    message: string;
+}): string {
+    return shell(`New ${escapeHtml(params.category)} message`, [
+        para(`<strong>${escapeHtml(params.name)}</strong> &lt;${escapeHtml(params.email)}&gt;`),
+        para(`<strong>Subject:</strong> ${escapeHtml(params.subject)}`),
+        `<div style="white-space: pre-wrap; color: #111827; font-size: 15px; line-height: 1.6; background: #f9fafb; border-radius: 8px; padding: 16px;">${escapeHtml(params.message)}</div>`,
+        small('Reply to this email to answer them directly. It is also listed on the Platform page under Support.'),
+    ].join(''));
+}

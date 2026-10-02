@@ -7,7 +7,8 @@ const envSchema = z.object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     PORT: z.coerce.number().default(5000),
     API_PREFIX: z.string().default('/api/v1'),
-    APP_NAME: z.string().default('CashBook SaaS'),
+    /** The product name in every email subject and body. */
+    APP_NAME: z.string().default('InChange'),
 
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
@@ -41,7 +42,7 @@ const envSchema = z.object({
     SMTP_USER: z.string().default(''),
     SMTP_PASS: z.string().default(''),
     EMAIL_FROM: z.string().default('noreply@cashbook.com'),
-    EMAIL_FROM_NAME: z.string().default('CashBook SaaS'),
+    EMAIL_FROM_NAME: z.string().default('InChange'),
 
     LOG_LEVEL: z.string().default('debug'),
     LOG_DIR: z.string().default('logs'),
@@ -111,6 +112,21 @@ const envSchema = z.object({
      * Set it in production: the default is only right on a dev machine.
      */
     API_PUBLIC_URL: z.string().url().default('http://localhost:5000'),
+
+    /**
+     * Days between confirming an account deletion and carrying it out. The
+     * owner can sign in and cancel at any point in between, which is what
+     * makes a mistaken — or someone else's — request recoverable.
+     */
+    ACCOUNT_DELETION_GRACE_DAYS: z.coerce.number().int().min(0).max(30).default(14),
+
+    /**
+     * Where messages from the public contact page are forwarded, with the
+     * sender as Reply-To. Every message is also stored and listed on the
+     * Platform page, so leaving this empty loses nothing — it just means
+     * nobody is emailed.
+     */
+    SUPPORT_INBOX_EMAIL: z.union([z.string().email(), z.literal('')]).default('info@odixtec.net'),
 });
 
 const parsed = envSchema.safeParse(process.env);

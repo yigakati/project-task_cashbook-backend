@@ -21,10 +21,18 @@ model User {
   isSuperAdmin  Boolean      @default(false) @map("is_super_admin")
   emailVerified Boolean      @default(false) @map("email_verified")
   lastLoginAt   DateTime?    @map("last_login_at")
+  /// Set when the account was deleted. The row stays as an anonymised
+  /// tombstone ("Deleted user") because other businesses' entries, journals and
+  /// HR records still name whoever created them; every personal field is
+  /// scrubbed at the same moment. See AccountDeletionService.
+  deletedAt     DateTime?    @map("deleted_at")
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
 
   refreshTokens            RefreshToken[]
+  deletionRequests         AccountDeletionRequest[] @relation("DeletionSubject")
+  deletionRequestsHandled  AccountDeletionRequest[] @relation("DeletionHandler")
+  contactMessagesResolved  ContactMessage[]         @relation("ContactMessageResolver")
   loginHistory             LoginHistory[]
   ownedWorkspaces          Workspace[]             @relation("WorkspaceOwner")
   workspaceMemberships     WorkspaceMember[]
@@ -3843,4 +3851,100 @@ model StorageQuotaRequest {
   @@index([workspaceId, status])
   @@index([status, createdAt])
   @@map("storage_quota_requests")
+}
+
+// ─── Account deletion ──────────────────────────────────
+//
+// Required by app stores: a person must be able to delete their account from
+// inside the app and from the web without signing in. A request moves through
+// a grace period before anything is removed, so a mistaken or malicious
+// request can be cancelled by the real owner.
+
+enum AccountDeletionStatus {
+  /// Asked for on the web; waiting for the owner to click the emailed link.
+  PENDING_VERIFICATION
+  /// Confirmed; runs automatically at scheduledFor unless cancelled.
+  SCHEDULED
+  /// Claimed by a worker and being carried out right now.
+  PROCESSING
+  /// Cannot run until something is resolved (see blockers), e.g. the person
+  /// still owns a business that has other members.
+  BLOCKED
+  CANCELLED
+  /// The emailed link was never used.
+  EXPIRED
+  COMPLETED
+  /// Errored while running; nothing was committed. Safe to retry.
+  FAILED
+}
+
+enum AccountDeletionSource {
+  IN_APP
+  WEB
+  ADMIN
+}
+
+model AccountDeletionRequest {
+  id                    String                @id @default(uuid()) @db.Uuid
+  userId                String                @map("user_id") @db.Uuid
+  source                AccountDeletionSource
+  status                AccountDeletionStatus
+  reason                String?
+  /// Where this request's emails go. Cleared once the deletion completes and
+  /// the final confirmation has been sent, so no address outlives the account.
+  contactEmail          String?               @map("contact_email")
+  /// SHA-256 of the emailed confirmation token; the token itself is never stored.
+  verificationTokenHash String?               @unique @map("verification_token_hash")
+  verificationExpiresAt DateTime?             @map("verification_expires_at")
+  scheduledFor          DateTime?             @map("scheduled_for")
+  verifiedAt            DateTime?             @map("verified_at")
+  cancelledAt           DateTime?             @map("cancelled_at")
+  completedAt           DateTime?             @map("completed_at")
+  /// The superadmin who scheduled, cancelled or forced this request, if any.
+  handledById           String?               @map("handled_by_id") @db.Uuid
+  adminNote             String?               @map("admin_note")
+  /// Why it cannot run yet (BLOCKED), as shown to the person and the admin.
+  blockers              Json?
+  /// What was removed, by count — kept as the record that it was carried out.
+  summary               Json?
+  failureReason         String?               @map("failure_reason")
+  attempts              Int                   @default(0)
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+
+  user      User  @relation("DeletionSubject", fields: [userId], references: [id], onDelete: Cascade)
+  handledBy User? @relation("DeletionHandler", fields: [handledById], references: [id], onDelete: SetNull)
+
+  @@index([status, scheduledFor])
+  @@index([userId])
+  @@map("account_deletion_requests")
+}
+
+// ─── Contact form ──────────────────────────────────────
+
+enum ContactMessageStatus {
+  OPEN
+  RESOLVED
+}
+
+/// A message sent from the public contact page. Stored so nothing is lost when
+/// email delivery fails, and so superadmins can work through them in one place.
+model ContactMessage {
+  id             String               @id @default(uuid()) @db.Uuid
+  name           String
+  email          String
+  category       String
+  subject        String
+  message        String
+  status         ContactMessageStatus @default(OPEN)
+  resolvedAt     DateTime?            @map("resolved_at")
+  resolvedById   String?              @map("resolved_by_id") @db.Uuid
+  resolutionNote String?              @map("resolution_note")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  resolvedBy User? @relation("ContactMessageResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("contact_messages")
 }

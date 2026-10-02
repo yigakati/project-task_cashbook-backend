@@ -10,6 +10,7 @@ import { startWorkers, stopWorkers } from './workers';
 import { startDeadlineScheduler } from './jobs/deadlineScheduler';
 import { startMaintenanceScheduler } from './jobs/maintenanceScheduler';
 import { startAttendanceScheduler } from './jobs/attendanceScheduler';
+import { startAccountDeletionScheduler } from './jobs/accountDeletionScheduler';
 import { verifyEmailTransport } from './config/email';
 import { PlatformService } from './modules/platform/platform.service';
 
@@ -57,6 +58,7 @@ async function bootstrap() {
         let schedulerInterval: NodeJS.Timeout | null = null;
         let maintenanceInterval: NodeJS.Timeout | null = null;
         let attendanceInterval: NodeJS.Timeout | null = null;
+        let accountDeletionInterval: NodeJS.Timeout | null = null;
         try {
             workers = startWorkers();
             // One clear line at boot beats discovering the problem from a user
@@ -66,6 +68,7 @@ async function bootstrap() {
             schedulerInterval = startDeadlineScheduler();
             maintenanceInterval = startMaintenanceScheduler();
             attendanceInterval = startAttendanceScheduler();
+            accountDeletionInterval = startAccountDeletionScheduler();
         } catch (workerError) {
             logger.warn('⚠️  Failed to start workers, background jobs will not process', { error: workerError });
         }
@@ -101,6 +104,7 @@ async function bootstrap() {
                 if (schedulerInterval) clearInterval(schedulerInterval);
                 if (maintenanceInterval) clearInterval(maintenanceInterval);
                 if (attendanceInterval) clearInterval(attendanceInterval);
+                if (accountDeletionInterval) clearInterval(accountDeletionInterval);
                 if (workers) {
                     try {
                         await stopWorkers(workers);
