@@ -14,6 +14,7 @@ import { startAccountDeletionScheduler } from './jobs/accountDeletionScheduler';
 import { startTargetsScheduler } from './jobs/targetsScheduler';
 import { verifyEmailTransport } from './config/email';
 import { PlatformService } from './modules/platform/platform.service';
+import { ReviewAccountService } from './modules/platform/review-account.service';
 
 const PORT = config.PORT;
 
@@ -52,6 +53,16 @@ async function bootstrap() {
             });
         } catch (error) {
             logger.warn('⚠️  Superadmin reconciliation failed', { error });
+        }
+
+        // Make sure the app-store review sign-in exists and works. Idempotent
+        // and safe across replicas (advisory lock); non-fatal like the above.
+        try {
+            const { container } = await import('tsyringe');
+            const result = await container.resolve(ReviewAccountService).ensure();
+            logger.info('Review account check complete', { status: result.status, email: result.email });
+        } catch (error) {
+            logger.warn('⚠️  Review account check failed', { error });
         }
 
         // Start BullMQ workers

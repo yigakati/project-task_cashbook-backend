@@ -290,7 +290,7 @@ export class AccountDeletionService {
 
         await this.notify(user.email, 'Confirm your account deletion', accountDeletionVerifyEmailTemplate({
             firstName: user.firstName,
-            confirmUrl: appUrl(`/data-deletion/confirm?token=${encodeURIComponent(token)}`),
+            confirmUrl: appUrl(`/delete-account/confirm?token=${encodeURIComponent(token)}`),
             expiresInHours: VERIFICATION_TTL_HOURS,
         }));
     }

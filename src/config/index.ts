@@ -59,6 +59,19 @@ const envSchema = z.object({
     SUPER_ADMIN_EMAIL: z.string().email().default('admin@cashbook.com'),
 
     /**
+     * The sign-in handed to app-store reviewers (Google Play's "App access").
+     * Ensured on every boot — created if missing, repaired if its password,
+     * verification or workspace drifted — so the credentials in the store
+     * listing always work. Set REVIEW_ACCOUNT_EMAIL to empty to stop.
+     *
+     * The defaults are the ones submitted to Play. They grant nothing beyond an
+     * ordinary personal account, and the reviewer already holds them; override
+     * both in the environment to rotate.
+     */
+    REVIEW_ACCOUNT_EMAIL: z.string().trim().toLowerCase().default('user@playstore.com'),
+    REVIEW_ACCOUNT_PASSWORD: z.string().default('secret2026'),
+
+    /**
      * Double-entry ledger rollout switch.
      *
      *   off    no journals are written (pre-ledger behaviour)
