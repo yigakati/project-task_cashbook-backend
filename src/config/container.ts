@@ -57,6 +57,8 @@ import { AccountDeletionService } from '../modules/account-deletion/account-dele
 import { AccountDeletionController } from '../modules/account-deletion/account-deletion.controller';
 import { SupportService } from '../modules/support/support.service';
 import { SupportController } from '../modules/support/support.controller';
+import { TargetsService } from '../modules/targets/targets.service';
+import { TargetsController } from '../modules/targets/targets.controller';
 import { WorkspaceProfileService } from '../modules/workspace-profile/workspace-profile.service';
 import { EntriesService } from '../modules/entries/entries.service';
 import { FilesService } from '../modules/files/files.service';
@@ -108,6 +110,8 @@ container.registerSingleton(AccountDeletionService);
 container.registerSingleton(AccountDeletionController);
 container.registerSingleton(SupportService);
 container.registerSingleton(SupportController);
+container.registerSingleton(TargetsService);
+container.registerSingleton(TargetsController);
 container.registerSingleton(WorkspaceProfileService);
 container.registerSingleton(EntriesService);
 container.registerSingleton(StorageService);

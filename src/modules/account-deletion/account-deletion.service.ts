@@ -575,6 +575,11 @@ export class AccountDeletionService {
                 // Contact cards other businesses keep for this person stay
                 // theirs, but no longer point at a live account.
                 await tx.contact.updateMany({ where: { userId: user.id }, data: { userId: null } });
+                // Their own targets in other businesses can never move again.
+                await tx.target.updateMany({
+                    where: { assigneeId: user.id, archivedAt: null },
+                    data: { archivedAt: new Date() },
+                });
                 await tx.referralAgent.updateMany({
                     where: { userId: user.id, isActive: true },
                     data: { isActive: false, revokedAt: new Date() },

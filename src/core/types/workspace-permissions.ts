@@ -50,6 +50,12 @@ export enum WorkspacePermission {
     POST_MANUAL_JOURNAL = 'POST_MANUAL_JOURNAL',
     CLOSE_PERIOD = 'CLOSE_PERIOD',
     VIEW_FINANCIAL_REPORTS = 'VIEW_FINANCIAL_REPORTS',
+    /**
+     * Set, change and archive targets — the business's own, and those given to
+     * individual members. Seeing a business-wide target needs
+     * ACCESS_ALL_CASHBOOKS instead, because its total spans every book.
+     */
+    MANAGE_TARGETS = 'MANAGE_TARGETS',
 
     // ─── Operational modules ───
     VIEW_INVENTORY = 'VIEW_INVENTORY',
@@ -246,6 +252,7 @@ export const WORKSPACE_PERMISSION_MATRIX: Record<WorkspaceRole, Set<WorkspacePer
         P.MANAGE_MEMBERS,
         P.MANAGE_SUB_ACCOUNTANTS,
         P.ACCESS_ALL_CASHBOOKS,
+        P.MANAGE_TARGETS,
         P.MANAGE_CHART_OF_ACCOUNTS,
         P.CLOSE_PERIOD,
         P.VIEW_AUDIT_LOG,
@@ -286,6 +293,7 @@ export const WORKSPACE_PERMISSION_MATRIX: Record<WorkspaceRole, Set<WorkspacePer
         P.ACCESS_ALL_CASHBOOKS,
         P.VIEW_AUDIT_LOG,
         P.WAIVE_ATTENDANCE_FLAG,
+        P.MANAGE_TARGETS,
     ]),
 
     /**

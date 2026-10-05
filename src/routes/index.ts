@@ -18,6 +18,7 @@ import {
     accountDeletionPublicRouter,
 } from '../modules/account-deletion/account-deletion.routes';
 import { supportPublicRouter } from '../modules/support/support.routes';
+import targetsRoutes from '../modules/targets/targets.routes';
 import paymentModesRoutes from '../modules/payment-modes/payment-modes.routes';
 import filesRoutes from '../modules/files/files.routes';
 import reportsRoutes from '../modules/reports/reports.routes';
@@ -101,6 +102,7 @@ router.use('/workspaces/:workspaceId/contact-links', contactLinksWorkspaceRouter
 router.use('/contact-links', contactLinksRouter);
 router.use('/workspaces/:workspaceId/referrals', referralsRoutes);
 router.use('/workspaces/:workspaceId/storage', storageWorkspaceRouter);
+router.use('/workspaces/:workspaceId/targets', targetsRoutes);
 router.use('/payment-modes', paymentModesRoutes);
 router.use('/files', filesRoutes);
 router.use('/reports', reportsRoutes);

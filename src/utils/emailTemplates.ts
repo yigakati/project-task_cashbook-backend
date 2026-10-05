@@ -573,3 +573,20 @@ export function contactMessageEmailTemplate(params: {
         small('Reply to this email to answer them directly. It is also listed on the Platform page under Support.'),
     ].join(''));
 }
+
+// ─── Targets ───────────────────────────────────────────
+
+/** A target alert: behind pace, reached, or period ended. */
+export function targetAlertEmailTemplate(params: {
+    firstName: string;
+    title: string;
+    body: string;
+    url: string;
+}): string {
+    return shell(escapeHtml(params.title), [
+        para(`Hi ${escapeHtml(params.firstName)},`),
+        para(escapeHtml(params.body)),
+        button(params.url, 'Open target'),
+        small(`You get these because email alerts are on for this target in ${config.APP_NAME}. A manager can turn them off in the target's settings.`),
+    ].join(''));
+}

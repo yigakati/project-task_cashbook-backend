@@ -33,74 +33,77 @@ model User {
   deletionRequests         AccountDeletionRequest[] @relation("DeletionSubject")
   deletionRequestsHandled  AccountDeletionRequest[] @relation("DeletionHandler")
   contactMessagesResolved  ContactMessage[]         @relation("ContactMessageResolver")
+  targetsCreated           Target[]                 @relation("TargetCreator")
+  targetsAssigned          Target[]                 @relation("TargetAssignee")
+  targetContributions      TargetContribution[]     @relation("TargetContributionRecorder")
   loginHistory             LoginHistory[]
-  ownedWorkspaces          Workspace[]             @relation("WorkspaceOwner")
+  ownedWorkspaces          Workspace[]              @relation("WorkspaceOwner")
   workspaceMemberships     WorkspaceMember[]
   cashbookMemberships      CashbookMember[]
   entries                  Entry[]
   entryAudits              EntryAudit[]
-  deleteRequests           DeleteRequest[]         @relation("DeleteRequester")
-  deleteReviews            DeleteRequest[]         @relation("DeleteReviewer")
+  deleteRequests           DeleteRequest[]          @relation("DeleteRequester")
+  deleteReviews            DeleteRequest[]          @relation("DeleteReviewer")
   auditLogs                AuditLog[]
   financialAuditLogs       FinancialAuditLog[]
-  sentInvites              PendingInvite[]         @relation("InviteSender")
-  projectsCreated          Project[]               @relation("ProjectCreator")
+  sentInvites              PendingInvite[]          @relation("InviteSender")
+  projectsCreated          Project[]                @relation("ProjectCreator")
   projectMemberships       ProjectMember[]
-  tasksCreated             Task[]                  @relation("TaskCreator")
-  taskAssignments          TaskAssignment[]        @relation("TaskAssignee")
-  taskAssigned             TaskAssignment[]        @relation("TaskAssigner")
+  tasksCreated             Task[]                   @relation("TaskCreator")
+  taskAssignments          TaskAssignment[]         @relation("TaskAssignee")
+  taskAssigned             TaskAssignment[]         @relation("TaskAssigner")
   taskComments             TaskComment[]
-  checklistItemsDone       TaskChecklistItem[]     @relation("ChecklistCompleter")
-  taskRequestsMade         TaskAssignmentRequest[] @relation("TaskRequestRequester")
-  taskRequestsReviewed     TaskAssignmentRequest[] @relation("TaskRequestReviewer")
-  taskReportsWritten       TaskReport[]            @relation("TaskReportAuthor")
-  expenseClaimsMade        TaskExpenseClaim[]      @relation("ExpenseClaimant")
-  expenseClaimsReviewed    TaskExpenseClaim[]      @relation("ExpenseReviewer")
+  checklistItemsDone       TaskChecklistItem[]      @relation("ChecklistCompleter")
+  taskRequestsMade         TaskAssignmentRequest[]  @relation("TaskRequestRequester")
+  taskRequestsReviewed     TaskAssignmentRequest[]  @relation("TaskRequestReviewer")
+  taskReportsWritten       TaskReport[]             @relation("TaskReportAuthor")
+  expenseClaimsMade        TaskExpenseClaim[]       @relation("ExpenseClaimant")
+  expenseClaimsReviewed    TaskExpenseClaim[]       @relation("ExpenseReviewer")
   staffContacts            Contact[]
-  taskReportsReviewed      TaskReport[]            @relation("TaskReportReviewer")
+  taskReportsReviewed      TaskReport[]             @relation("TaskReportReviewer")
   timeEntries              TimeEntry[]
-  timeEntriesCreated       TimeEntry[]             @relation("TimeEntryCreator")
+  timeEntriesCreated       TimeEntry[]              @relation("TimeEntryCreator")
   workSessions             WorkSession[]
   workSchedules            WorkSchedule[]
   attendanceDays           AttendanceDay[]
-  leaveRequests            LeaveRequest[]          @relation("LeaveRequester")
-  leaveReviewed            LeaveRequest[]          @relation("LeaveReviewer")
-  overtimeRequests         OvertimeRequest[]       @relation("OvertimeRequester")
-  overtimeReviewed         OvertimeRequest[]       @relation("OvertimeReviewer")
-  attendanceFlags          AttendanceFlag[]        @relation("FlaggedUser")
-  flagsWaived              AttendanceFlag[]        @relation("FlagWaiver")
-  workReports              WorkReport[]            @relation("WorkReportAuthor")
-  workReportsReviewed      WorkReport[]            @relation("WorkReportReviewer")
-  workSessionsAdjusted     WorkSession[]           @relation("WorkSessionAdjuster")
-  workSessionsClosed       WorkSession[]           @relation("WorkSessionCloser")
+  leaveRequests            LeaveRequest[]           @relation("LeaveRequester")
+  leaveReviewed            LeaveRequest[]           @relation("LeaveReviewer")
+  overtimeRequests         OvertimeRequest[]        @relation("OvertimeRequester")
+  overtimeReviewed         OvertimeRequest[]        @relation("OvertimeReviewer")
+  attendanceFlags          AttendanceFlag[]         @relation("FlaggedUser")
+  flagsWaived              AttendanceFlag[]         @relation("FlagWaiver")
+  workReports              WorkReport[]             @relation("WorkReportAuthor")
+  workReportsReviewed      WorkReport[]             @relation("WorkReportReviewer")
+  workSessionsAdjusted     WorkSession[]            @relation("WorkSessionAdjuster")
+  workSessionsClosed       WorkSession[]            @relation("WorkSessionCloser")
   notifications            Notification[]
   journalEntries           JournalEntry[]
-  featuresEnabled          WorkspaceFeature[]      @relation("FeatureEnabler")
-  ticketDaysOpened         TicketDay[]             @relation("TicketDayOpener")
-  ticketDaysClosed         TicketDay[]             @relation("TicketDayCloser")
-  ticketShifts             TicketShift[]           @relation("ShiftAttendant")
-  ticketShiftsClosed       TicketShift[]           @relation("ShiftCloser")
-  ticketSales              TicketSale[]            @relation("TicketSeller")
-  ticketSalesVoided        TicketSale[]            @relation("TicketVoider")
-  membershipsIssued        Membership[]            @relation("MembershipIssuer")
-  apiKeysCreated           ApiKey[]                @relation("ApiKeyCreator")
-  apiKeysRevoked           ApiKey[]                @relation("ApiKeyRevoker")
+  featuresEnabled          WorkspaceFeature[]       @relation("FeatureEnabler")
+  ticketDaysOpened         TicketDay[]              @relation("TicketDayOpener")
+  ticketDaysClosed         TicketDay[]              @relation("TicketDayCloser")
+  ticketShifts             TicketShift[]            @relation("ShiftAttendant")
+  ticketShiftsClosed       TicketShift[]            @relation("ShiftCloser")
+  ticketSales              TicketSale[]             @relation("TicketSeller")
+  ticketSalesVoided        TicketSale[]             @relation("TicketVoider")
+  membershipsIssued        Membership[]             @relation("MembershipIssuer")
+  apiKeysCreated           ApiKey[]                 @relation("ApiKeyCreator")
+  apiKeysRevoked           ApiKey[]                 @relation("ApiKeyRevoker")
   linkedIdentities         LinkedIdentity[]
-  contactLinksRequested    ContactLinkRequest[]    @relation("ContactLinkRequester")
-  contactLinksReceived     ContactLinkRequest[]    @relation("ContactLinkRecipient")
-  referralAgent            ReferralAgent?          @relation("ReferralAgentUser")
-  referralAgentsAppointed  ReferralAgent[]         @relation("ReferralAgentAppointer")
-  platformSettingsEdited   PlatformSetting[]       @relation("PlatformSettingEditor")
-  referredBy               Referral?               @relation("ReferredUser")
-  storageRequestsMade      StorageQuotaRequest[]   @relation("StorageRequester")
-  storageRequestsDecided   StorageQuotaRequest[]   @relation("StorageDecider")
-  settlementsRecorded      PeerLinkSettlement[]    @relation("PeerLinkSettlementRecorder")
-  peerLinksInitiated       PeerLink[]              @relation("PeerLinkInitiator")
-  peerLinksReceived        PeerLink[]              @relation("PeerLinkCounterparty")
-  stockTransfersSent       StockTransfer[]         @relation("StockTransferSender")
-  stockTransfersReceived   StockTransfer[]         @relation("StockTransferRecipient")
-  rentalAgreementsLent     RentalAgreement[]       @relation("RentalAgreementLender")
-  rentalAgreementsBorrowed RentalAgreement[]       @relation("RentalAgreementBorrower")
+  contactLinksRequested    ContactLinkRequest[]     @relation("ContactLinkRequester")
+  contactLinksReceived     ContactLinkRequest[]     @relation("ContactLinkRecipient")
+  referralAgent            ReferralAgent?           @relation("ReferralAgentUser")
+  referralAgentsAppointed  ReferralAgent[]          @relation("ReferralAgentAppointer")
+  platformSettingsEdited   PlatformSetting[]        @relation("PlatformSettingEditor")
+  referredBy               Referral?                @relation("ReferredUser")
+  storageRequestsMade      StorageQuotaRequest[]    @relation("StorageRequester")
+  storageRequestsDecided   StorageQuotaRequest[]    @relation("StorageDecider")
+  settlementsRecorded      PeerLinkSettlement[]     @relation("PeerLinkSettlementRecorder")
+  peerLinksInitiated       PeerLink[]               @relation("PeerLinkInitiator")
+  peerLinksReceived        PeerLink[]               @relation("PeerLinkCounterparty")
+  stockTransfersSent       StockTransfer[]          @relation("StockTransferSender")
+  stockTransfersReceived   StockTransfer[]          @relation("StockTransferRecipient")
+  rentalAgreementsLent     RentalAgreement[]        @relation("RentalAgreementLender")
+  rentalAgreementsBorrowed RentalAgreement[]        @relation("RentalAgreementBorrower")
 
   @@unique([provider, providerId])
   @@map("users")
@@ -237,6 +240,7 @@ model Workspace {
   profile                WorkspaceProfile?
   attachments            Attachment[]            @relation("WorkspaceAttachments")
   storageRequests        StorageQuotaRequest[]
+  targets                Target[]
   contactLinksAsA        ContactLink[]           @relation("ContactLinkWorkspaceA")
   contactLinksAsB        ContactLink[]           @relation("ContactLinkWorkspaceB")
   contactLinkRequestsOut ContactLinkRequest[]    @relation("ContactLinkRequestRequester")
@@ -342,16 +346,16 @@ model WorkspaceFeature {
 // ─── Cashbook ──────────────────────────────────────────
 
 model Cashbook {
-  id                  String   @id @default(uuid()) @db.Uuid
-  workspaceId         String   @map("workspace_id") @db.Uuid
+  id                  String    @id @default(uuid()) @db.Uuid
+  workspaceId         String    @map("workspace_id") @db.Uuid
   name                String
   description         String?
-  currency            String   @default("UGX")
-  balance             Decimal  @default(0) @db.Decimal(20, 4)
-  totalIncome         Decimal  @default(0) @map("total_income") @db.Decimal(20, 4)
-  totalExpense        Decimal  @default(0) @map("total_expense") @db.Decimal(20, 4)
-  allowBackdate       Boolean  @default(false) @map("allow_backdate")
-  isActive            Boolean  @default(true) @map("is_active")
+  currency            String    @default("UGX")
+  balance             Decimal   @default(0) @db.Decimal(20, 4)
+  totalIncome         Decimal   @default(0) @map("total_income") @db.Decimal(20, 4)
+  totalExpense        Decimal   @default(0) @map("total_expense") @db.Decimal(20, 4)
+  allowBackdate       Boolean   @default(false) @map("allow_backdate")
+  isActive            Boolean   @default(true) @map("is_active")
   /// When the book was retired. An archived book keeps every entry, drops out
   /// of the active list and refuses new ones, and can be restored.
   ///
@@ -361,13 +365,13 @@ model Cashbook {
   /// Short, human-readable reference code for external API integrations.
   /// It is deliberately nullable: a book is not exposed to integrations until
   /// an authorised user explicitly activates it.
-  bookRef             String?  @unique @map("book_ref")
+  bookRef             String?   @unique @map("book_ref")
   /// This book's private "unallocated book cash" ASSET account. Nullable only so
   /// the ledger can be introduced without a destructive migration; every
   /// cashbook created after Phase 1 has one.
-  cashLedgerAccountId String?  @unique @map("cash_ledger_account_id") @db.Uuid
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  cashLedgerAccountId String?   @unique @map("cash_ledger_account_id") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
   workspace             Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   members               CashbookMember[]
@@ -381,6 +385,7 @@ model Cashbook {
   cashLedgerAccount     LedgerAccount?       @relation(fields: [cashLedgerAccountId], references: [id], onDelete: Restrict)
   journalEntries        JournalEntry[]
   ticketSettings        TicketSettings?
+  targetScopes          TargetCashbook[]
 
   @@index([workspaceId])
   @@index([workspaceId, archivedAt])
@@ -858,15 +863,15 @@ model ContactLinkRequest {
   /// The address the request is aimed at, lowercased. Always set — it is what
   /// an invite is emailed to, and what a later signup is matched against, so
   /// it is the stable key whether or not an account exists yet.
-  recipientEmail       String  @map("recipient_email")
+  recipientEmail String @map("recipient_email")
 
   /// Null while the invitee has no account. Filled in the moment someone signs
   /// up with `recipientEmail`, which is what moves the request into their
   /// inbox to accept or decline like any other.
-  recipientUserId      String? @map("recipient_user_id") @db.Uuid
+  recipientUserId      String?      @map("recipient_user_id") @db.Uuid
   /// Chosen by the recipient at acceptance. Null until then, and stays null
   /// if declined, cancelled or expired.
-  recipientWorkspaceId String? @map("recipient_workspace_id") @db.Uuid
+  recipientWorkspaceId String?      @map("recipient_workspace_id") @db.Uuid
   recipientType        ContactType? @map("recipient_type")
 
   message        String?
@@ -876,10 +881,10 @@ model ContactLinkRequest {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  requesterUser      User        @relation("ContactLinkRequester", fields: [requesterUserId], references: [id])
-  recipientUser      User?       @relation("ContactLinkRecipient", fields: [recipientUserId], references: [id])
-  requesterWorkspace Workspace   @relation("ContactLinkRequestRequester", fields: [requesterWorkspaceId], references: [id], onDelete: Cascade)
-  recipientWorkspace Workspace?  @relation("ContactLinkRequestRecipient", fields: [recipientWorkspaceId], references: [id], onDelete: SetNull)
+  requesterUser      User         @relation("ContactLinkRequester", fields: [requesterUserId], references: [id])
+  recipientUser      User?        @relation("ContactLinkRecipient", fields: [recipientUserId], references: [id])
+  requesterWorkspace Workspace    @relation("ContactLinkRequestRequester", fields: [requesterWorkspaceId], references: [id], onDelete: Cascade)
+  recipientWorkspace Workspace?   @relation("ContactLinkRequestRecipient", fields: [recipientWorkspaceId], references: [id], onDelete: SetNull)
   link               ContactLink?
 
   @@index([recipientUserId, status])
@@ -1989,12 +1994,12 @@ model Invoice {
   /// address change would silently rewrite what every past invoice claims it
   /// was issued to. Null on invoices issued before this existed; readers fall
   /// back to the live customer in that case.
-  billToSnapshot Json?         @map("bill_to_snapshot")
+  billToSnapshot Json? @map("bill_to_snapshot")
 
-  cashbookId     String?       @map("cashbook_id") @db.Uuid
-  createdById    String        @map("created_by_id") @db.Uuid
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  cashbookId  String?  @map("cashbook_id") @db.Uuid
+  createdById String   @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   customer  Contact           @relation(fields: [customerId], references: [id], onDelete: Restrict)
@@ -3002,6 +3007,10 @@ enum NotificationType {
   CONTACT_LINK_RECEIVED
   CONTACT_LINK_DECIDED
   STORAGE_REQUEST_DECIDED
+  TARGET_BEHIND
+  TARGET_ACHIEVED
+  TARGET_ENDED
+  TARGET_REMINDER
 }
 
 /// What a notification points at, so it can link to something other than a task
@@ -3022,6 +3031,7 @@ enum NotificationEntityType {
   RENTAL_AGREEMENT
   CONTACT_LINK_REQUEST
   STORAGE_QUOTA_REQUEST
+  TARGET
 }
 
 model Notification {
@@ -3947,4 +3957,128 @@ model ContactMessage {
 
   @@index([status, createdAt])
   @@map("contact_messages")
+}
+
+// ─── Targets ───────────────────────────────────────────
+//
+// "Make 50M this year": a goal over a period, and how much is needed per day
+// to reach it from where things stand now. Nothing about progress is stored —
+// it is computed from posted entries every time, so it can never drift from
+// the books.
+
+enum TargetMetric {
+  /// Income recorded in the period.
+  MONEY_IN
+  /// Income less expenses (charges included) — a profit goal.
+  NET
+}
+
+enum TargetSource {
+  /// Counted from posted entries in the workspace's books.
+  BOOKS
+  /// Recorded by hand against the target, apart from the books.
+  MANUAL
+}
+
+enum TargetContributionKind {
+  ADDITION
+  WITHDRAWAL
+}
+
+model Target {
+  id                  String       @id @default(uuid()) @db.Uuid
+  workspaceId         String       @map("workspace_id") @db.Uuid
+  name                String
+  /// Fixed once set: switching would silently change what "achieved" means.
+  source              TargetSource @default(BOOKS)
+  /// How book entries are measured. Hand-recorded targets are always MONEY_IN.
+  metric              TargetMetric @default(MONEY_IN)
+  amount              Decimal      @db.Decimal(20, 4)
+  /// The workspace currency when the target was set. Cashbooks are locked to
+  /// it, so every counted entry is in this currency.
+  currency            String
+  /// First and last business date of the period, both inclusive, in the
+  /// workspace's timezone.
+  startDate           DateTime     @map("start_date") @db.Date
+  endDate             DateTime     @map("end_date") @db.Date
+  /// ISO weekdays (1 = Monday … 7 = Sunday) the target is spread across. All
+  /// seven means every calendar day; a shop closed on Sundays drops 7, so the
+  /// daily figure is what it needs on the days it trades.
+  workingDays         Int[]        @map("working_days")
+  /// Set for a person's own target: only entries they recorded count. Null is
+  /// the business's target.
+  assigneeId          String?      @map("assignee_id") @db.Uuid
+  /// Raised before tracking began ("I already have 20M"), in hand from the
+  /// start of openingDate. On a book target: money made outside these books.
+  openingAmount       Decimal      @default(0) @map("opening_amount") @db.Decimal(20, 4)
+  /// Null when there is no opening amount.
+  openingDate         DateTime?    @map("opening_date") @db.Date
+  /// Start the next period when this one ends. How often follows from the
+  /// period itself (a month repeats monthly, a week weekly), so the two can't disagree.
+  repeats             Boolean      @default(false)
+  /// The period this one continues, for recurring targets.
+  previousId          String?      @unique @map("previous_id") @db.Uuid
+  alertsEnabled       Boolean      @default(true) @map("alerts_enabled")
+  /// Also email the alerts, not just show them in the app.
+  emailAlerts         Boolean      @default(false) @map("email_alerts")
+  /// Hand-recorded targets only: an evening nudge on a counted day with nothing recorded.
+  remindToRecord      Boolean      @default(false) @map("remind_to_record")
+  /// Business date of the last reminder, so one goes at most daily.
+  lastReminderDate    DateTime?    @map("last_reminder_date") @db.Date
+  /// ISO week (e.g. 2026-W40) the last "behind pace" alert went out, so one
+  /// goes at most weekly however often the scheduler runs.
+  lastBehindAlertWeek String?      @map("last_behind_alert_week")
+  achievedAt          DateTime?    @map("achieved_at")
+  endedNotifiedAt     DateTime?    @map("ended_notified_at")
+  archivedAt          DateTime?    @map("archived_at")
+  createdById         String       @map("created_by_id") @db.Uuid
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  workspace     Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignee      User?                @relation("TargetAssignee", fields: [assigneeId], references: [id], onDelete: Cascade)
+  createdBy     User                 @relation("TargetCreator", fields: [createdById], references: [id])
+  previous      Target?              @relation("TargetRollover", fields: [previousId], references: [id], onDelete: SetNull)
+  next          Target?              @relation("TargetRollover")
+  cashbooks     TargetCashbook[]
+  contributions TargetContribution[]
+
+  @@index([workspaceId, archivedAt])
+  @@index([assigneeId])
+  @@index([repeats, endDate])
+  @@map("targets")
+}
+
+/// The books a target is limited to. None means every book in the workspace.
+model TargetCashbook {
+  targetId   String @map("target_id") @db.Uuid
+  cashbookId String @map("cashbook_id") @db.Uuid
+
+  target   Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  cashbook Cashbook @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
+
+  @@id([targetId, cashbookId])
+  @@index([cashbookId])
+  @@map("target_cashbooks")
+}
+
+/// Money recorded by hand against a MANUAL target, on a business date.
+model TargetContribution {
+  id           String                 @id @default(uuid()) @db.Uuid
+  targetId     String                 @map("target_id") @db.Uuid
+  date         DateTime               @db.Date
+  kind         TargetContributionKind @default(ADDITION)
+  /// Always positive; a withdrawal's kind makes it count against the target.
+  amount       Decimal                @db.Decimal(20, 4)
+  note         String?                @db.VarChar(280)
+  recordedById String                 @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @updatedAt @map("updated_at")
+
+  target     Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  recordedBy User   @relation("TargetContributionRecorder", fields: [recordedById], references: [id])
+
+  @@index([targetId, date])
+  @@index([recordedById])
+  @@map("target_contributions")
 }
