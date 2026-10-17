@@ -18,6 +18,7 @@ import {
     accountDeletionPublicRouter,
 } from '../modules/account-deletion/account-deletion.routes';
 import { supportPublicRouter } from '../modules/support/support.routes';
+import { billingPublicRouter, billingRouter } from '../modules/billing/billing.routes';
 import targetsRoutes from '../modules/targets/targets.routes';
 import paymentModesRoutes from '../modules/payment-modes/payment-modes.routes';
 import filesRoutes from '../modules/files/files.routes';
@@ -126,6 +127,10 @@ router.use('/workspaces/:workspaceId/api-keys', apiKeysRoutes);
 // contact form. Both rate-limited per IP in their routers.
 router.use('/account-deletion', accountDeletionPublicRouter);
 router.use('/support', supportPublicRouter);
+// Plans are public (the pricing page works signed out); account and checkout
+// need a session. Checkout answers PAYMENTS_COMING_SOON until a provider is set.
+router.use('/billing', billingPublicRouter);
+router.use('/billing', billingRouter);
 
 // ─── Invoice logos (no session) ───────────────────────
 // Printed on invoices and embedded in the emails they are sent in, so a

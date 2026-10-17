@@ -72,6 +72,17 @@ const envSchema = z.object({
     REVIEW_ACCOUNT_PASSWORD: z.string().default('secret2026'),
 
     /**
+     * Whether plan limits on business workspaces are enforced.
+     *
+     * Off until paid plans go live: everyone is on Free (one business
+     * workspace), and refusing a second one before there is any way to
+     * upgrade would strand existing users. Turn on together with payments.
+     * Existing workspaces are never touched either way — only creating one
+     * beyond the limit is refused.
+     */
+    PLAN_LIMITS_ENFORCED: z.string().default('false').transform((v) => v === 'true'),
+
+    /**
      * Double-entry ledger rollout switch.
      *
      *   off    no journals are written (pre-ledger behaviour)

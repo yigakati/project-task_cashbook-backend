@@ -68,6 +68,8 @@ import { PaymentModesService } from '../modules/payment-modes/payment-modes.serv
 import { ReportsService } from '../modules/reports/reports.service';
 import { UsersService } from '../modules/users/users.service';
 import { WorkspacesService } from '../modules/workspaces/workspaces.service';
+import { BillingService, NotConfiguredPaymentProvider } from '../modules/billing/billing.service';
+import { BillingController } from '../modules/billing/billing.controller';
 import { InvitesService } from '../modules/invites/invites.service';
 import { MinioCleanupJob } from '../jobs/s3Cleanup';
 import { InventoryService } from '../modules/inventory/inventory.service';
@@ -121,6 +123,11 @@ container.registerSingleton(PaymentModesService);
 container.registerSingleton(ReportsService);
 container.registerSingleton(UsersService);
 container.registerSingleton(WorkspacesService);
+
+// Billing: switch to a real provider by registering it here (same token).
+container.registerSingleton('PaymentProvider', NotConfiguredPaymentProvider);
+container.registerSingleton(BillingService);
+container.registerSingleton(BillingController);
 container.registerSingleton(InvitesService);
 container.registerSingleton(MinioCleanupJob);
 container.registerSingleton(InventoryService);

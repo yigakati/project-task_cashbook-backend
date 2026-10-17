@@ -104,6 +104,8 @@ model User {
   stockTransfersReceived   StockTransfer[]          @relation("StockTransferRecipient")
   rentalAgreementsLent     RentalAgreement[]        @relation("RentalAgreementLender")
   rentalAgreementsBorrowed RentalAgreement[]        @relation("RentalAgreementBorrower")
+  subscription             UserSubscription?
+  subscriptionPayments     SubscriptionPayment[]
 
   @@unique([provider, providerId])
   @@map("users")
@@ -1237,6 +1239,78 @@ model IdempotencyRecord {
 enum WorkspaceType {
   PERSONAL
   BUSINESS
+}
+
+/// What an account has bought. What each plan *means* lives in
+/// src/core/billing/plans.ts, not here — these values only name it.
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+}
+
+/// One row per account that has ever chosen a plan. No row means Free, so
+/// every existing user is on it without a backfill.
+model UserSubscription {
+  id     String             @id @default(uuid()) @db.Uuid
+  userId String             @unique @map("user_id") @db.Uuid
+  plan   SubscriptionPlan   @default(FREE)
+  status SubscriptionStatus @default(ACTIVE)
+  /// Storage added on top of the plan's included amount, per workspace, in GB,
+  /// in 0.5 GB steps. Bounded by the plan's own maximum (see plans.ts).
+  extraStorageGb    Decimal   @default(0) @map("extra_storage_gb") @db.Decimal(6, 1)
+  /// The paid period. Null while nothing has been paid for (Free, or a plan
+  /// chosen before payments went live).
+  currentPeriodStart DateTime? @map("current_period_start")
+  currentPeriodEnd   DateTime? @map("current_period_end")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_subscriptions")
+}
+
+enum SubscriptionPaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+/// One attempt to pay for a plan. Written when a payment is asked of the
+/// provider and settled once by its confirmation, which is what activates the
+/// plan — so a provider calling back twice can't extend it twice. Nothing is
+/// written while payments are off.
+model SubscriptionPayment {
+  id        String                    @id @default(uuid()) @db.Uuid
+  userId    String                    @map("user_id") @db.Uuid
+  /// Ours, sent to the provider and echoed back in its confirmation.
+  reference String                    @unique
+  provider  String
+  /// The provider's own id for the transaction, once it gives one.
+  providerReference String?           @map("provider_reference")
+  plan      SubscriptionPlan
+  extraStorageGb Decimal              @default(0) @map("extra_storage_gb") @db.Decimal(6, 1)
+  /// Whole shillings, computed by the server from the plan catalogue.
+  amountUgx Int                       @map("amount_ugx")
+  /// Masked ("+256 77• ••• 567"): enough to recognise, not to reuse.
+  phoneMasked String                  @map("phone_masked")
+  status    SubscriptionPaymentStatus @default(PENDING)
+  failureReason String?               @map("failure_reason")
+  settledAt DateTime?                 @map("settled_at")
+  createdAt DateTime                  @default(now()) @map("created_at")
+  updatedAt DateTime                  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("subscription_payments")
 }
 
 enum WorkspaceRole {

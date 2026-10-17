@@ -8,9 +8,12 @@
 import 'reflect-metadata';
 import { container } from 'tsyringe';
 import { testPrisma } from './setup';
+import { NotConfiguredPaymentProvider } from '../modules/billing/billing.service';
 
 const testContainer = container.createChildContainer();
 testContainer.registerInstance('PrismaClient', testPrisma);
+// As in production until a payment provider is chosen (config/container.ts).
+testContainer.registerSingleton('PaymentProvider', NotConfiguredPaymentProvider);
 
 /*
  * Some services resolve collaborators lazily through the ROOT container

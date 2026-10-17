@@ -5,6 +5,8 @@ import { NotFoundError, AuthorizationError, AppError } from '../../core/errors/A
 import { WorkspaceType, WorkspaceRole, AuditAction } from '../../core/types';
 import { CreateWorkspaceDto, UpdateWorkspaceDto } from './workspaces.dto';
 import { assertSupportedBaseCurrency } from '../../core/finance';
+import { config } from '../../config';
+import { businessWorkspaceLimit, ownedBusinessWorkspaces } from '../../core/billing/entitlements';
 import {
     provisionWorkspaceAccounting,
     seedDefaultWalletAccounts,
@@ -33,6 +35,24 @@ export class WorkspacesService {
     async createBusinessWorkspace(userId: string, dto: CreateWorkspaceDto) {
         const defaultCurrency = assertSupportedBaseCurrency(dto.defaultCurrency || 'UGX');
         const workspace = await this.prisma.$transaction(async (tx) => {
+            if (config.PLAN_LIMITS_ENFORCED) {
+                // One account's creations in a row, so two at once can't both
+                // pass the count below.
+                await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${`workspaces:${userId}`}, 0))`;
+                const [limit, owned] = await Promise.all([
+                    businessWorkspaceLimit(tx, userId),
+                    ownedBusinessWorkspaces(tx, userId),
+                ]);
+                if (owned >= limit) {
+                    throw new AppError(
+                        `Your plan includes ${limit} business workspace${limit === 1 ? '' : 's'}, and you have ${owned}. `
+                        + 'Upgrade your plan, or delete one you no longer use.',
+                        403,
+                        'PLAN_WORKSPACE_LIMIT',
+                    );
+                }
+            }
+
             const ws = await tx.workspace.create({
                 data: {
                     name: dto.name,

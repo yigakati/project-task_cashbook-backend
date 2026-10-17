@@ -18,6 +18,7 @@ import { AuditAction } from '../../core/types';
 import { NotificationsService } from '../notifications/notifications.service';
 import { logger } from '../../utils/logger';
 import { formatBytes } from '../../utils/format-bytes';
+import { planStorageBytes } from '../../core/billing/entitlements';
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -59,15 +60,22 @@ export async function getDefaultQuotaBytes(db: DbClient): Promise<number> {
     return Number.isFinite(value) && value > 0 ? value : DEFAULT_STORAGE_QUOTA_BYTES;
 }
 
+/**
+ * The workspace's allowance: the larger of what it was given (a superadmin's
+ * grant, or the platform default) and what its owner's plan includes. A plan
+ * only ever raises the allowance — paying never lowers a grant.
+ */
 export async function getStorageLimitBytes(db: DbClient, workspaceId: string): Promise<number> {
     const workspace = await db.workspace.findUnique({
         where: { id: workspaceId },
-        select: { storageQuotaBytes: true },
+        select: { storageQuotaBytes: true, ownerId: true },
     });
     if (!workspace) throw new NotFoundError('Workspace');
-    return workspace.storageQuotaBytes != null
-        ? Number(workspace.storageQuotaBytes)
-        : getDefaultQuotaBytes(db);
+    const [granted, fromPlan] = await Promise.all([
+        workspace.storageQuotaBytes != null ? Number(workspace.storageQuotaBytes) : getDefaultQuotaBytes(db),
+        planStorageBytes(db, workspace.ownerId),
+    ]);
+    return Math.max(granted, fromPlan ?? 0);
 }
 
 /**
