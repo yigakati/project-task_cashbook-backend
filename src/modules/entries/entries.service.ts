@@ -2,6 +2,7 @@ import { injectable, inject } from 'tsyringe';
 import { Prisma, PrismaClient, TransactionSourceType, InventoryReferenceType, EntryStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { EntriesRepository } from './entries.repository';
+import { syncSharedEntry } from '../shared-entries/shared-entries.lifecycle';
 import { assertCashbookWritable } from '../cashbooks/cashbook-state';
 import {
     NotFoundError,
@@ -372,6 +373,35 @@ export class EntriesService {
     }
 
     // ─── Create Entry ─────────────────────────────────
+    async getEntrySharing(entryId: string, cashbookId: string) {
+        const entry = await this.prisma.entry.findFirst({
+            where: { id: entryId, cashbookId },
+            select: {
+                sharedEntries: { select: { id: true, status: true, createdAt: true, respondedAt: true } },
+                receivedSharedEntry: { select: {
+                    id: true, senderName: true, amount: true, type: true, entryDate: true, description: true,
+                    sourceContactId: true,
+                    sourceEntry: { select: { status: true, amount: true, type: true, entryDate: true, description: true, contactId: true } },
+                } },
+            },
+        });
+        if (!entry) throw new NotFoundError('Entry');
+        const received = entry.receivedSharedEntry;
+        return {
+            deliveries: entry.sharedEntries,
+            received: received ? {
+                id: received.id, senderName: received.senderName,
+                sourceState: !received.sourceEntry ? 'UNAVAILABLE'
+                    : received.sourceEntry.status === 'REVERSED' ? 'REVERSED'
+                    : !received.sourceEntry.amount.equals(received.amount)
+                        || received.sourceEntry.type === received.type
+                        || received.sourceEntry.contactId !== received.sourceContactId
+                        || received.sourceEntry.description !== received.description
+                        || received.sourceEntry.entryDate.getTime() !== received.entryDate.getTime() ? 'CHANGED' : 'UNCHANGED',
+            } : null,
+        };
+    }
+
     /**
      * Record money moving, and everything that follows from it.
      *
@@ -382,8 +412,11 @@ export class EntriesService {
      * durable while the money it recorded was not.
      */
     async createEntry(cashbookId: string, userId: string, dto: CreateEntryDto) {
-        const entry = await withFinancialTransaction(this.prisma, (tx) =>
-            this.createEntryWithin(tx, cashbookId, userId, dto));
+        const entry = await withFinancialTransaction(this.prisma, async (tx) => {
+            const created = await this.createEntryWithin(tx, cashbookId, userId, dto);
+            await syncSharedEntry(tx, created.id);
+            return created;
+        });
 
         // Background Hook: Send Automatic Receipt if paying an Obligation.
         // Deliberately outside the transaction, and deliberately not awaited:
@@ -430,6 +463,7 @@ export class EntriesService {
         assertCashbookWritable(cashbook);
 
         const entryDate = new Date(dto.entryDate);
+        await this.validateEntryReferences(tx, cashbook.workspaceId, dto);
 
         // Check backdate rule
         if (!cashbook.allowBackdate && isDateInPast(entryDate)) {
@@ -859,6 +893,7 @@ export class EntriesService {
         }
 
         const updated = await withFinancialTransaction(this.prisma, async (tx) => {
+            await this.validateEntryReferences(tx, cashbook.workspaceId, dto);
             // Lock every row this write may touch, once, in a globally consistent
             // order. Locking BOTH the current and the target wallet here is what
             // removes the X->Y / Y->X deadlock: previously they were locked in
@@ -1290,6 +1325,7 @@ export class EntriesService {
                 }
             }
 
+            await syncSharedEntry(tx, updatedEntry.id);
             return updatedEntry;
         });
 
@@ -1644,6 +1680,8 @@ export class EntriesService {
                 },
             },
         });
+
+        await syncSharedEntry(tx, entry.id);
 
         // Entry audit
         await tx.entryAudit.create({
@@ -2193,6 +2231,7 @@ export class EntriesService {
                 },
             });
 
+            await syncSharedEntry(tx, moved.id);
             return moved;
         });
     }
@@ -2206,6 +2245,21 @@ export class EntriesService {
      * membership row; everyone else needs one, which is what keeps a
      * PROJECT_MANAGER confined to the books they were granted.
      */
+    private async validateEntryReferences(
+        tx: Prisma.TransactionClient,
+        workspaceId: string,
+        dto: { contactId?: string | null; categoryId?: string | null; paymentModeId?: string | null },
+    ) {
+        // Foreign keys alone do not enforce tenant ownership. This is also
+        // used by shared-entry acceptance, which accepts recipient-side tags.
+        const checks = await Promise.all([
+            dto.contactId ? tx.contact.findFirst({ where: { id: dto.contactId, workspaceId, isActive: true }, select: { id: true } }) : true,
+            dto.categoryId ? tx.category.findFirst({ where: { id: dto.categoryId, workspaceId, isActive: true }, select: { id: true } }) : true,
+            dto.paymentModeId ? tx.paymentMode.findFirst({ where: { id: dto.paymentModeId, workspaceId, isActive: true }, select: { id: true } }) : true,
+        ]);
+        if (checks.some(value => !value)) throw new AppError('Contact, category and payment mode must belong to this workspace and be active', 400, 'INVALID_ENTRY_REFERENCE');
+    }
+
     private async assertCanPostToCashbook(cashbookId: string, workspaceId: string, userId: string) {
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: cashbookId },

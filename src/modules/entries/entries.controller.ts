@@ -68,6 +68,13 @@ export class EntriesController {
         }
     }
 
+    async sharing(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const data = await this.entriesService.getEntrySharing(req.params.entryId as string, req.params.cashbookId as string);
+            res.json({ success: true, data });
+        } catch (error) { next(error); }
+    }
+
     async update(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const entry = await this.entriesService.updateEntry(

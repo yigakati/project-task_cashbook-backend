@@ -106,6 +106,7 @@ model User {
   rentalAgreementsBorrowed RentalAgreement[]        @relation("RentalAgreementBorrower")
   subscription             UserSubscription?
   subscriptionPayments     SubscriptionPayment[]
+  receivedEntries          SharedEntry[] @relation("SharedEntryRecipient")
 
   @@unique([provider, providerId])
   @@map("users")
@@ -466,6 +467,8 @@ model Entry {
   agreementIncome     RentalAgreement?     @relation("RentalAgreementIncome")
   transferExpense     StockTransfer?       @relation("StockTransferExpense")
   transferIncome      StockTransfer?       @relation("StockTransferIncome")
+  sharedEntries       SharedEntry[] @relation("SharedEntrySource")
+  receivedSharedEntry SharedEntry?  @relation("SharedEntryResult")
 
   @@unique([cashbookId, integrationApiKeyId, externalRef])
   @@index([cashbookId])
@@ -477,6 +480,45 @@ model Entry {
   @@index([cashbookId, status, entryDate])
   @@index([integrationApiKeyId])
   @@map("entries")
+}
+
+enum SharedEntryStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+/// An offer to record the other side of a payment. Snapshots are frozen once
+/// decided; neither party can edit the other's books. Destination details are
+/// only exposed to the recipient, never to the source workspace.
+model SharedEntry {
+  id                String @id @default(uuid()) @db.Uuid
+  sourceEntryId     String? @map("source_entry_id") @db.Uuid
+  recipientUserId   String @map("recipient_user_id") @db.Uuid
+  status            SharedEntryStatus @default(PENDING)
+  sourceVersion     Int @map("source_version")
+  sourceContactId   String @map("source_contact_id") @db.Uuid
+  sourceWorkspaceId String @map("source_workspace_id") @db.Uuid
+  senderName        String @map("sender_name")
+  type              EntryType
+  amount            Decimal @db.Decimal(20, 4)
+  currency          String
+  description       String
+  entryDate         DateTime @map("entry_date")
+  acceptedEntryId   String? @unique @map("accepted_entry_id") @db.Uuid
+  responseReason    String? @map("response_reason")
+  respondedAt       DateTime? @map("responded_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  sourceEntry   Entry? @relation("SharedEntrySource", fields: [sourceEntryId], references: [id], onDelete: SetNull)
+  recipientUser User @relation("SharedEntryRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  acceptedEntry Entry? @relation("SharedEntryResult", fields: [acceptedEntryId], references: [id], onDelete: SetNull)
+
+  @@unique([sourceEntryId, recipientUserId])
+  @@index([recipientUserId, status, createdAt])
+  @@map("shared_entries")
 }
 
 model EntryAudit {

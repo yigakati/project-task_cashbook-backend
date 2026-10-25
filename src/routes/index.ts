@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import sharedEntriesRoutes from '../modules/shared-entries/shared-entries.routes';
 import authRoutes from '../modules/auth/auth.routes';
 import usersRoutes from '../modules/users/users.routes';
 import workspacesRoutes from '../modules/workspaces/workspaces.routes';
@@ -97,6 +98,7 @@ router.use('/cashbooks/:cashbookId/peer-links', peerLinksCashbookRouter);
 // across workspaces, like /me/attendance.
 router.use('/peer-links', peerLinksRouter);
 router.use('/entries', entriesRoutes);
+router.use('/shared-entries', sharedEntriesRoutes);
 router.use('/categories', categoriesRoutes);
 router.use('/contacts', contactsRoutes);
 router.use('/workspaces/:workspaceId/contact-links', contactLinksWorkspaceRouter);

@@ -589,6 +589,7 @@ export class ContactLinksService {
             }
 
             const linkId = contact.contactLinkId;
+            const connectedContacts = await tx.contact.findMany({ where: { contactLinkId: linkId }, select: { id: true } });
 
             await tx.contactLink.update({
                 where: { id: linkId },
@@ -607,6 +608,11 @@ export class ContactLinksService {
                     linkedSnapshot: Prisma.DbNull,
                     linkedSyncedAt: null,
                 },
+            });
+
+            await tx.sharedEntry.updateMany({
+                where: { sourceContactId: { in: connectedContacts.map(c => c.id) }, status: 'PENDING' },
+                data: { status: 'CANCELLED', respondedAt: new Date(), responseReason: 'The contact connection was disconnected.' },
             });
 
             await tx.auditLog.create({

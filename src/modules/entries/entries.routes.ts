@@ -5,6 +5,7 @@ import { authenticate } from '../../middlewares/authenticate';
 import { validate } from '../../middlewares/validate';
 import { requireCashbookMember } from '../../middlewares/authorize';
 import { idempotency } from '../../middlewares/idempotency';
+import { uuidParams } from '../../middlewares/uuidParam';
 import { CashbookPermission } from '../../core/types/permissions';
 import {
     createEntrySchema,
@@ -33,6 +34,13 @@ router.get(
 );
 
 // ─── Entry CRUD ────────────────────────────────────────
+router.get(
+    '/:entryId/sharing/cashbook/:cashbookId',
+    validate(uuidParams('entryId', 'cashbookId'), 'params'),
+    requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
+    entriesController.sharing.bind(entriesController) as any,
+);
+
 router.get(
     '/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,

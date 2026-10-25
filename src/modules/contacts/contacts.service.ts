@@ -87,6 +87,12 @@ export class ContactsService {
             ...dto,
             type: dto.type ? (dto.type as ContactType) : undefined,
         });
+        if (dto.email !== undefined && dto.email?.trim().toLowerCase() !== contact.email?.trim().toLowerCase()) {
+            await this.prisma.sharedEntry.updateMany({
+                where: { sourceContactId: contactId, status: 'PENDING' },
+                data: { status: 'CANCELLED', respondedAt: new Date(), responseReason: 'The source contact changed.' },
+            });
+        }
         await this.prisma.auditLog.create({
             data: { userId, workspaceId, action: AuditAction.CONTACT_UPDATED, resource: 'contact', resourceId: contactId, details: dto as any },
         });
@@ -114,6 +120,10 @@ export class ContactsService {
         await assertManualContactsEnabled(this.prisma);
 
         await this.contactsRepository.softDelete(contactId);
+        await this.prisma.sharedEntry.updateMany({
+            where: { sourceContactId: contactId, status: 'PENDING' },
+            data: { status: 'CANCELLED', respondedAt: new Date(), responseReason: 'The source contact was removed.' },
+        });
         await this.prisma.auditLog.create({
             data: { userId, workspaceId, action: AuditAction.CONTACT_DELETED, resource: 'contact', resourceId: contactId },
         });

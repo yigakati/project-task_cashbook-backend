@@ -559,6 +559,16 @@ export class AccountDeletionService {
                 // The ledger is append-only; purging a whole workspace is the
                 // one sanctioned exception, scoped to this transaction.
                 await tx.$executeRawUnsafe(`SET LOCAL app.allow_ledger_maintenance = 'on'`);
+                // Accepted copies belong to their recipients and survive a
+                // source purge. Pending deliveries cannot remain actionable.
+                await tx.sharedEntry.updateMany({
+                    where: { status: 'PENDING', OR: [
+                        { recipientUserId: user.id },
+                        { sourceWorkspaceId: { in: workspaceIds } },
+                        { sourceEntry: { createdById: user.id } },
+                    ] },
+                    data: { status: 'CANCELLED', respondedAt: new Date(), responseReason: 'An account involved in this entry was deleted.' },
+                });
                 for (const workspaceId of workspaceIds) {
                     await purgeWorkspace(tx, workspaceId);
                 }
