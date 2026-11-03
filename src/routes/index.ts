@@ -57,7 +57,13 @@ import notificationsRoutes from '../modules/notifications/notifications.routes';
 import apiKeysRoutes from '../modules/api-keys/api-keys.routes';
 import integrationRoutes from '../modules/integration/integration.routes';
 
+import { housingWorkspaceRouter, housingTenantRouter } from '../modules/housing/housing.routes';
+import rentalIssuesRouter from '../modules/rental-issues/rental-issues.routes';
+
 const router = Router();
+router.use('/workspaces/:workspaceId/housing', housingWorkspaceRouter);
+router.use('/housing', housingTenantRouter);
+router.use('/rental-issues', rentalIssuesRouter);
 
 // API v1 routes
 router.use('/auth', authRoutes);

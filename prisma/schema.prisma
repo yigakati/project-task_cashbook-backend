@@ -106,7 +106,8 @@ model User {
   rentalAgreementsBorrowed RentalAgreement[]        @relation("RentalAgreementBorrower")
   subscription             UserSubscription?
   subscriptionPayments     SubscriptionPayment[]
-  receivedEntries          SharedEntry[] @relation("SharedEntryRecipient")
+  receivedEntries          SharedEntry[]            @relation("SharedEntryRecipient")
+  housingTenancies         HousingTenancy[]
 
   @@unique([provider, providerId])
   @@map("users")
@@ -223,74 +224,79 @@ model Workspace {
   createdAt               DateTime               @default(now()) @map("created_at")
   updatedAt               DateTime               @updatedAt @map("updated_at")
 
-  owner                  User                    @relation("WorkspaceOwner", fields: [ownerId], references: [id])
-  members                WorkspaceMember[]
-  cashbooks              Cashbook[]
-  categories             Category[]
-  contacts               Contact[]
-  paymentModes           PaymentMode[]
-  obligations            CashbookObligation[]
-  peerLinksInitiated     PeerLink[]              @relation("PeerLinkInitiatorWorkspace")
-  peerLinksCounterparty  PeerLink[]              @relation("PeerLinkCounterpartyWorkspace")
-  unitsOfMeasure         UnitOfMeasure[]
-  itemCategories         ItemCategory[]
-  stockTransfersSent     StockTransfer[]         @relation("StockTransferSenderWorkspace")
-  stockTransfersReceived StockTransfer[]         @relation("StockTransferRecipientWorkspace")
-  rentalAgreements       RentalAgreement[]       @relation("RentalAgreementLenderWorkspace")
-  auditLogs              AuditLog[]
-  financialAuditLogs     FinancialAuditLog[]
-  pendingInvites         PendingInvite[]
-  profile                WorkspaceProfile?
-  attachments            Attachment[]            @relation("WorkspaceAttachments")
-  storageRequests        StorageQuotaRequest[]
-  targets                Target[]
-  contactLinksAsA        ContactLink[]           @relation("ContactLinkWorkspaceA")
-  contactLinksAsB        ContactLink[]           @relation("ContactLinkWorkspaceB")
-  contactLinkRequestsOut ContactLinkRequest[]    @relation("ContactLinkRequestRequester")
-  contactLinkRequestsIn  ContactLinkRequest[]    @relation("ContactLinkRequestRecipient")
-  linkedFromContacts     Contact[]               @relation("ContactLinkedWorkspace")
-  accountTypes           AccountType[]
-  accounts               Account[]
-  accountCategories      AccountCategory[]
-  inventoryItems         InventoryItem[]
-  inventoryRentals       InventoryRental[]
-  taxes                  Tax[]
-  productsServices       ProductService[]
-  invoices               Invoice[]
-  invoiceSettings        InvoiceSettings?
-  projects               Project[]
-  tasks                  Task[]
-  workSessions           WorkSession[]
-  timeEntries            TimeEntry[]
-  taskAssignmentRequests TaskAssignmentRequest[]
-  taskReports            TaskReport[]
-  expenseClaims          TaskExpenseClaim[]
-  attendanceSettings     AttendanceSettings?
-  attendanceSites        AttendanceSite[]
-  workSchedules          WorkSchedule[]
-  holidays               Holiday[]
-  attendanceDays         AttendanceDay[]
-  leaveTypes             LeaveType[]
-  leaveRequests          LeaveRequest[]
-  overtimeRequests       OvertimeRequest[]
-  attendanceFlags        AttendanceFlag[]
-  workReports            WorkReport[]
-  notifications          Notification[]
-  ledgerAccounts         LedgerAccount[]
-  journalEntries         JournalEntry[]
-  fiscalPeriods          FiscalPeriod[]
-  features               WorkspaceFeature[]
-  ticketSettings         TicketSettings?
-  ticketSessions         TicketSession[]
-  ticketTypes            TicketType[]
-  ticketDiscountRules    TicketDiscountRule[]
-  ticketDays             TicketDay[]
-  ticketShifts           TicketShift[]
-  ticketSales            TicketSale[]
-  tickets                Ticket[]
-  membershipTiers        MembershipTier[]
-  memberships            Membership[]
-  apiKeys                ApiKey[]
+  owner                       User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members                     WorkspaceMember[]
+  cashbooks                   Cashbook[]
+  categories                  Category[]
+  contacts                    Contact[]
+  paymentModes                PaymentMode[]
+  obligations                 CashbookObligation[]
+  peerLinksInitiated          PeerLink[]                   @relation("PeerLinkInitiatorWorkspace")
+  peerLinksCounterparty       PeerLink[]                   @relation("PeerLinkCounterpartyWorkspace")
+  unitsOfMeasure              UnitOfMeasure[]
+  itemCategories              ItemCategory[]
+  stockTransfersSent          StockTransfer[]              @relation("StockTransferSenderWorkspace")
+  stockTransfersReceived      StockTransfer[]              @relation("StockTransferRecipientWorkspace")
+  rentalAgreements            RentalAgreement[]            @relation("RentalAgreementLenderWorkspace")
+  auditLogs                   AuditLog[]
+  financialAuditLogs          FinancialAuditLog[]
+  pendingInvites              PendingInvite[]
+  profile                     WorkspaceProfile?
+  attachments                 Attachment[]                 @relation("WorkspaceAttachments")
+  storageRequests             StorageQuotaRequest[]
+  targets                     Target[]
+  contactLinksAsA             ContactLink[]                @relation("ContactLinkWorkspaceA")
+  contactLinksAsB             ContactLink[]                @relation("ContactLinkWorkspaceB")
+  contactLinkRequestsOut      ContactLinkRequest[]         @relation("ContactLinkRequestRequester")
+  contactLinkRequestsIn       ContactLinkRequest[]         @relation("ContactLinkRequestRecipient")
+  linkedFromContacts          Contact[]                    @relation("ContactLinkedWorkspace")
+  accountTypes                AccountType[]
+  accounts                    Account[]
+  accountCategories           AccountCategory[]
+  inventoryItems              InventoryItem[]
+  inventoryRentals            InventoryRental[]
+  taxes                       Tax[]
+  productsServices            ProductService[]
+  invoices                    Invoice[]
+  invoiceSettings             InvoiceSettings?
+  projects                    Project[]
+  tasks                       Task[]
+  workSessions                WorkSession[]
+  timeEntries                 TimeEntry[]
+  taskAssignmentRequests      TaskAssignmentRequest[]
+  taskReports                 TaskReport[]
+  expenseClaims               TaskExpenseClaim[]
+  attendanceSettings          AttendanceSettings?
+  attendanceSites             AttendanceSite[]
+  workSchedules               WorkSchedule[]
+  holidays                    Holiday[]
+  attendanceDays              AttendanceDay[]
+  leaveTypes                  LeaveType[]
+  leaveRequests               LeaveRequest[]
+  overtimeRequests            OvertimeRequest[]
+  attendanceFlags             AttendanceFlag[]
+  workReports                 WorkReport[]
+  notifications               Notification[]
+  ledgerAccounts              LedgerAccount[]
+  journalEntries              JournalEntry[]
+  fiscalPeriods               FiscalPeriod[]
+  features                    WorkspaceFeature[]
+  ticketSettings              TicketSettings?
+  ticketSessions              TicketSession[]
+  ticketTypes                 TicketType[]
+  ticketDiscountRules         TicketDiscountRule[]
+  ticketDays                  TicketDay[]
+  ticketShifts                TicketShift[]
+  ticketSales                 TicketSale[]
+  tickets                     Ticket[]
+  membershipTiers             MembershipTier[]
+  memberships                 Membership[]
+  apiKeys                     ApiKey[]
+  housingProperties           HousingProperty[]
+  housingProvisioningRequests HousingProvisioningRequest[]
+  housingUnits                HousingUnit[]
+  tenancies                   HousingTenancy[]
+  rentalIssues                RentalIssue[]
 
   @@index([ownerId])
   @@index([type])
@@ -467,8 +473,9 @@ model Entry {
   agreementIncome     RentalAgreement?     @relation("RentalAgreementIncome")
   transferExpense     StockTransfer?       @relation("StockTransferExpense")
   transferIncome      StockTransfer?       @relation("StockTransferIncome")
-  sharedEntries       SharedEntry[] @relation("SharedEntrySource")
-  receivedSharedEntry SharedEntry?  @relation("SharedEntryResult")
+  sharedEntries       SharedEntry[]        @relation("SharedEntrySource")
+  receivedSharedEntry SharedEntry?         @relation("SharedEntryResult")
+  rentPayment         RentPayment?
 
   @@unique([cashbookId, integrationApiKeyId, externalRef])
   @@index([cashbookId])
@@ -852,6 +859,7 @@ model Contact {
   inventoryRentals InventoryRental[]
   projects         Project[]
   memberships      Membership[]
+  housingTenancies HousingTenancy[]
 
   /// One staff contact per person per workspace.
   @@unique([workspaceId, userId])
@@ -1173,12 +1181,14 @@ model Attachment {
   deletedAt      DateTime? @map("deleted_at")
   createdAt      DateTime  @default(now()) @map("created_at")
 
-  cashbook     Cashbook?         @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
-  entry        Entry?            @relation(fields: [entryId], references: [id], onDelete: SetNull)
-  task         Task?             @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  taskReport   TaskReport?       @relation(fields: [taskReportId], references: [id], onDelete: Cascade)
-  expenseClaim TaskExpenseClaim? @relation(fields: [expenseClaimId], references: [id], onDelete: Cascade)
-  workspace    Workspace?        @relation("WorkspaceAttachments", fields: [workspaceId], references: [id], onDelete: Cascade)
+  cashbook      Cashbook?         @relation(fields: [cashbookId], references: [id], onDelete: Cascade)
+  entry         Entry?            @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  task          Task?             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskReport    TaskReport?       @relation(fields: [taskReportId], references: [id], onDelete: Cascade)
+  expenseClaim  TaskExpenseClaim? @relation(fields: [expenseClaimId], references: [id], onDelete: Cascade)
+  workspace     Workspace?        @relation("WorkspaceAttachments", fields: [workspaceId], references: [id], onDelete: Cascade)
+  housingUnitId String?           @map("housing_unit_id") @db.Uuid
+  housingUnit   HousingUnit?      @relation(fields: [housingUnitId], references: [id], onDelete: Cascade)
 
   @@index([cashbookId])
   @@index([entryId])
@@ -1731,6 +1741,7 @@ model InventoryRental {
   invoice   Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   lines     InventoryRentalLine[]
   agreement RentalAgreement?      @relation("RentalAgreementRental")
+  issues    RentalIssue[]
 
   @@index([workspaceId])
   @@index([customerId])
@@ -3094,6 +3105,10 @@ model WorkSession {
 // ─── Notifications ──────────────────────────────────────
 
 enum NotificationType {
+  HOUSING_INVITATION
+  HOUSING_UPDATED
+  RENT_DUE
+  RENTAL_ISSUE_UPDATED
   TASK_ASSIGNED
   TASK_DUE_SOON
   TASK_OVERDUE
@@ -3132,6 +3147,8 @@ enum NotificationType {
 /// What a notification points at, so it can link to something other than a task
 /// without adding a nullable foreign key per entity type.
 enum NotificationEntityType {
+  HOUSING_TENANCY
+  RENTAL_ISSUE
   TASK
   TASK_ASSIGNMENT_REQUEST
   TASK_REPORT
@@ -4197,4 +4214,234 @@ model TargetContribution {
   @@index([targetId, date])
   @@index([recordedById])
   @@map("target_contributions")
+}
+
+// Housing is a dated occupancy register, independent of inventory quantities.
+enum HousingUnitKind {
+  ROOM
+  APARTMENT
+  HOUSE
+}
+
+enum HousingTenancyStatus {
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum TenantInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+model HousingProperty {
+  id                   String                       @id @default(uuid()) @db.Uuid
+  workspaceId          String                       @map("workspace_id") @db.Uuid
+  name                 String
+  address              String?
+  description          String?
+  currency             String
+  defaultKind          HousingUnitKind              @default(APARTMENT) @map("default_kind")
+  defaultMonthlyRent   Decimal                      @map("default_monthly_rent") @db.Decimal(20, 4)
+  unitLabelPrefix      String                       @default("Unit ") @map("unit_label_prefix")
+  unitNumberStart      Int                          @default(1) @map("unit_number_start")
+  archivedAt           DateTime?                    @map("archived_at")
+  version              Int                          @default(1)
+  createdAt            DateTime                     @default(now()) @map("created_at")
+  updatedAt            DateTime                     @updatedAt @map("updated_at")
+  workspace            Workspace                    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  units                HousingUnit[]
+  provisioningRequests HousingProvisioningRequest[]
+
+  // Case-insensitive, trimmed name uniqueness is enforced by migration 0039.
+  @@unique([id, workspaceId])
+  @@unique([id, workspaceId, currency])
+  @@index([workspaceId, archivedAt])
+  @@map("housing_properties")
+}
+
+model HousingProvisioningRequest {
+  id          String          @id @default(uuid()) @db.Uuid
+  workspaceId String          @map("workspace_id") @db.Uuid
+  userId      String          @map("user_id") @db.Uuid
+  propertyId  String          @map("property_id") @db.Uuid
+  requestId   String          @map("request_id") @db.Uuid
+  operation   String
+  requestHash String          @map("request_hash")
+  result      Json
+  createdAt   DateTime        @default(now()) @map("created_at")
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  property    HousingProperty @relation(fields: [propertyId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, requestId])
+  @@index([propertyId])
+  @@map("housing_provisioning_requests")
+}
+
+model HousingUnit {
+  id          String           @id @default(uuid()) @db.Uuid
+  workspaceId String           @map("workspace_id") @db.Uuid
+  propertyId  String           @map("property_id") @db.Uuid
+  name        String
+  description String?
+  kind        HousingUnitKind  @default(APARTMENT)
+  currency    String
+  monthlyRent Decimal          @map("monthly_rent") @db.Decimal(20, 4)
+  archivedAt  DateTime?        @map("archived_at")
+  version     Int              @default(1)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  property    HousingProperty  @relation(fields: [propertyId, workspaceId, currency], references: [id, workspaceId, currency], onDelete: Cascade, map: "housing_units_property_workspace_currency_fkey")
+  tenancies   HousingTenancy[]
+  photos      Attachment[]
+
+  // Case-insensitive, trimmed label uniqueness is enforced by migration 0039.
+  @@unique([id, workspaceId])
+  @@index([propertyId, archivedAt])
+  @@index([workspaceId, archivedAt])
+  @@map("housing_units")
+}
+
+model HousingTenancy {
+  id                String                  @id @default(uuid()) @db.Uuid
+  workspaceId       String                  @map("workspace_id") @db.Uuid
+  unitId            String                  @map("unit_id") @db.Uuid
+  tenantName        String                  @map("tenant_name")
+  contactId         String?                 @map("contact_id") @db.Uuid
+  // Frozen invitation identity. Contact edits must not silently change occupants.
+  tenantUserId      String?                 @map("tenant_user_id") @db.Uuid
+  invitationStatus  TenantInvitationStatus? @map("invitation_status")
+  status            HousingTenancyStatus    @default(ACTIVE)
+  startDate         DateTime                @map("start_date") @db.Date
+  endDate           DateTime?               @map("end_date") @db.Date
+  actualEndDate     DateTime?               @map("actual_end_date") @db.Date
+  monthlyRent       Decimal                 @map("monthly_rent") @db.Decimal(20, 4)
+  firstPeriodAmount Decimal?                @map("first_period_amount") @db.Decimal(20, 4)
+  finalPeriodAmount Decimal?                @map("final_period_amount") @db.Decimal(20, 4)
+  dueDay            Int                     @map("due_day")
+  currency          String
+  notes             String?
+  version           Int                     @default(1)
+  createdById       String                  @map("created_by_id") @db.Uuid
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+  workspace         Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  unit              HousingUnit             @relation(fields: [unitId, workspaceId], references: [id, workspaceId], onDelete: Cascade, map: "housing_tenancies_unit_workspace_fkey")
+  contact           Contact?                @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  tenantUser        User?                   @relation(fields: [tenantUserId], references: [id], onDelete: SetNull)
+  periods           RentPeriod[]
+  payments          RentPayment[]
+  issues            RentalIssue[]
+
+  @@index([workspaceId, status])
+  @@index([tenantUserId, invitationStatus])
+  @@index([unitId, startDate])
+  @@map("housing_tenancies")
+}
+
+model RentPeriod {
+  id               String           @id @default(uuid()) @db.Uuid
+  tenancyId        String           @map("tenancy_id") @db.Uuid
+  startDate        DateTime         @map("start_date") @db.Date
+  endDate          DateTime         @map("end_date") @db.Date
+  dueDate          DateTime         @map("due_date") @db.Date
+  amount           Decimal          @db.Decimal(20, 4)
+  cancelledAt      DateTime?        @map("cancelled_at")
+  adjustmentReason String?          @map("adjustment_reason")
+  version          Int              @default(1)
+  tenancy          HousingTenancy   @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  allocations      RentAllocation[]
+
+  @@unique([tenancyId, startDate])
+  @@index([dueDate, cancelledAt])
+  @@map("rent_periods")
+}
+
+model RentPayment {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenancyId   String           @map("tenancy_id") @db.Uuid
+  entryId     String?          @unique @map("entry_id") @db.Uuid
+  requestId   String           @map("request_id") @db.Uuid
+  requestHash String           @map("request_hash")
+  amount      Decimal          @db.Decimal(20, 4)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  tenancy     HousingTenancy   @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  entry       Entry?           @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  allocations RentAllocation[]
+
+  @@unique([tenancyId, requestId])
+  @@map("rent_payments")
+}
+
+model RentAllocation {
+  id        String      @id @default(uuid()) @db.Uuid
+  paymentId String      @map("payment_id") @db.Uuid
+  periodId  String      @map("period_id") @db.Uuid
+  amount    Decimal     @db.Decimal(20, 4)
+  payment   RentPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  period    RentPeriod  @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, periodId])
+  @@index([periodId])
+  @@map("rent_allocations")
+}
+
+enum RentalIssueKind {
+  MAINTENANCE
+  PAYMENT_DISPUTE
+  CONCERN
+}
+
+enum RentalIssueStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum RentalIssuePriority {
+  LOW
+  NORMAL
+  URGENT
+}
+
+model RentalIssue {
+  id          String               @id @default(uuid()) @db.Uuid
+  workspaceId String               @map("workspace_id") @db.Uuid
+  tenancyId   String?              @map("tenancy_id") @db.Uuid
+  rentalId    String?              @map("rental_id") @db.Uuid
+  createdById String               @map("created_by_id") @db.Uuid
+  title       String
+  description String
+  kind        RentalIssueKind
+  priority    RentalIssuePriority  @default(NORMAL)
+  status      RentalIssueStatus    @default(OPEN)
+  version     Int                  @default(1)
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenancy     HousingTenancy?      @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  rental      InventoryRental?     @relation(fields: [rentalId], references: [id], onDelete: Cascade)
+  messages    RentalIssueMessage[]
+
+  @@index([tenancyId, createdAt])
+  @@index([rentalId, createdAt])
+  @@index([workspaceId, status])
+  @@map("rental_issues")
+}
+
+model RentalIssueMessage {
+  id         String             @id @default(uuid()) @db.Uuid
+  issueId    String             @map("issue_id") @db.Uuid
+  authorId   String             @map("author_id") @db.Uuid
+  authorSide String             @map("author_side")
+  body       String
+  status     RentalIssueStatus?
+  createdAt  DateTime           @default(now()) @map("created_at")
+  issue      RentalIssue        @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId, createdAt])
+  @@map("rental_issue_messages")
 }

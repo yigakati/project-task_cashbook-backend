@@ -31,10 +31,11 @@ export const MAX_STORAGE_QUOTA_BYTES = 1024 * GIB;
 
 export const gbToBytes = (gb: number): number => Math.round(gb * GIB);
 
-export type StorageFileKind = 'entry' | 'task' | 'report' | 'claim';
+export type StorageFileKind = 'entry' | 'task' | 'report' | 'claim' | 'housing';
 
 const KIND_LABELS: Record<StorageFileKind | 'logo', string> = {
     logo: 'Invoice logo',
+    housing: 'Unit photos',
     entry: 'Entry attachments',
     task: 'Task files',
     report: 'Task report files',
@@ -42,6 +43,7 @@ const KIND_LABELS: Record<StorageFileKind | 'logo', string> = {
 };
 
 const KIND_FILTERS: Record<StorageFileKind, Prisma.AttachmentWhereInput> = {
+    housing: { housingUnitId: { not: null } },
     entry: { cashbookId: { not: null } },
     task: { taskId: { not: null } },
     report: { taskReportId: { not: null } },
@@ -241,7 +243,8 @@ export class StorageQuotaService {
                 select: {
                     id: true, fileName: true, fileSize: true, mimeType: true, createdAt: true,
                     cashbookId: true, taskId: true, taskReportId: true, expenseClaimId: true,
-                    uploadedById: true,
+                    uploadedById: true, housingUnitId: true,
+                    housingUnit: { select: { name: true, property: { select: { name: true } } } },
                     cashbook: { select: { name: true } },
                     entry: { select: { description: true } },
                     task: { select: { title: true } },
@@ -257,13 +260,21 @@ export class StorageQuotaService {
         const byId = new Map(uploaders.map((u) => [u.id, u]));
 
         const data = rows.map((r) => {
-            const kind: StorageFileKind = r.cashbookId ? 'entry'
-                : r.taskId ? 'task'
-                    : r.taskReportId ? 'report'
-                        : 'claim';
-            const context = kind === 'entry'
-                ? [r.cashbook?.name, r.entry?.description].filter(Boolean).join(' · ') || null
-                : kind === 'task' ? r.task?.title ?? null
+            const kind: StorageFileKind = r.housingUnitId
+                ? 'housing'
+                : r.cashbookId
+                  ? 'entry'
+                  : r.taskId
+                    ? 'task'
+                    : r.taskReportId
+                      ? 'report'
+                      : 'claim';
+            const context = kind === 'housing' && r.housingUnit
+                ? `${r.housingUnit.property.name} · ${r.housingUnit.name}`
+                : kind === 'entry'
+                  ? [r.cashbook?.name, r.entry?.description].filter(Boolean).join(' · ') || null
+                  : kind === 'task'
+                    ? r.task?.title ?? null
                     : null;
             const uploader = byId.get(r.uploadedById);
             return {

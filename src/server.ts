@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { startHousingScheduler } from './jobs/housingScheduler';
 import './config/container';
 import app from './app';
 import { config } from './config';
@@ -71,6 +72,7 @@ async function bootstrap() {
         let maintenanceInterval: NodeJS.Timeout | null = null;
         let attendanceInterval: NodeJS.Timeout | null = null;
         let accountDeletionInterval: NodeJS.Timeout | null = null;
+        let housingInterval: NodeJS.Timeout | null = null;
         let targetsInterval: NodeJS.Timeout | null = null;
         try {
             workers = startWorkers();
@@ -86,6 +88,10 @@ async function bootstrap() {
         } catch (workerError) {
             logger.warn('⚠️  Failed to start workers, background jobs will not process', { error: workerError });
         }
+
+        // Housing reminders write in-app notifications directly and can run
+        // even when the queue workers are unavailable.
+        housingInterval = startHousingScheduler();
 
         // Start HTTP server
         const server = app.listen(PORT, () => {
@@ -119,6 +125,7 @@ async function bootstrap() {
                 if (maintenanceInterval) clearInterval(maintenanceInterval);
                 if (attendanceInterval) clearInterval(attendanceInterval);
                 if (accountDeletionInterval) clearInterval(accountDeletionInterval);
+                if (housingInterval) clearInterval(housingInterval);
                 if (targetsInterval) clearInterval(targetsInterval);
                 if (workers) {
                     try {

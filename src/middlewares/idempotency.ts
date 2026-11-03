@@ -169,8 +169,10 @@ export function idempotency(endpoint: string, mode: IdempotencyMode = 'warn') {
             // Still running. The client should retry rather than get a duplicate.
             res.setHeader('Retry-After', '1');
             next(
-                new ConflictError(
+                new AppError(
                     'A request with this Idempotency-Key is still in progress. Retry shortly.',
+                    409,
+                    'IDEMPOTENCY_IN_PROGRESS',
                 ),
             );
             return;

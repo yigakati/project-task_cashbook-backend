@@ -789,6 +789,13 @@ export class EntriesService {
             throw new NotFoundError('Entry');
         }
 
+        // Rent allocations are immutable receipts. Correct the original through
+        // reversal + a replacement payment so period balances and shares agree.
+        if (await this.prisma.rentPayment.findUnique({ where: { entryId } }) &&
+            ['type', 'amount', 'contactId', 'obligationId', 'inventoryItems'].some(key => key in dto)) {
+            throw new AppError('Reverse this rent receipt and record a corrected payment from the tenancy', 409, 'RENT_RECEIPT_IMMUTABLE');
+        }
+
         // Soft immutability: reconciled entries cannot change money-affecting fields
         const financialFieldsTouched =
             dto.type !== undefined ||

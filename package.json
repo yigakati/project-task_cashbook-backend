@@ -27,7 +27,9 @@
     "build:scripts": "tsc -p tsconfig.scripts.json",
     "ops:backfill-ledger": "node dist-scripts/scripts/backfill-ledger.js",
     "ops:repair-balances": "node dist-scripts/scripts/repair-financial-balances.js",
-    "ops:rebuild-attendance": "node dist-scripts/scripts/rebuild-attendance-days.js"
+    "ops:rebuild-attendance": "node dist-scripts/scripts/rebuild-attendance-days.js",
+    "format:housing": "prettier --write \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\"",
+    "format:housing:check": "prettier --check \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\""
   },
   "keywords": [],
   "author": "",
@@ -77,6 +79,7 @@
     "@swc/core": "^1.15.46",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^3.2.7",
+    "prettier": "3.9.10",
     "supertest": "^7.2.2",
     "ts-node-dev": "^2.0.0",
     "tsconfig-paths": "^4.2.0",

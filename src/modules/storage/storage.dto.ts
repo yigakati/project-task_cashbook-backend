@@ -24,7 +24,7 @@ export const setWorkspaceQuotaSchema = z.object({
 export const storageFilesQuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
-    kind: z.enum(['all', 'entry', 'task', 'report', 'claim']).default('all'),
+    kind: z.enum(['all', 'entry', 'task', 'report', 'claim', 'housing']).default('all'),
     sort: z.enum(['size', 'recent']).default('size'),
 });
 
