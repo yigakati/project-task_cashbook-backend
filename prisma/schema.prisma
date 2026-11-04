@@ -128,18 +128,50 @@ model User {
  * their original signup provider — gets a row here.
  */
 model LinkedIdentity {
-  id         String       @id @default(uuid()) @db.Uuid
-  userId     String       @map("user_id") @db.Uuid
-  provider   AuthProvider
-  providerId String       @map("provider_id")
-  email      String
-  linkedAt   DateTime     @default(now()) @map("linked_at")
+  id               String            @id @default(uuid()) @db.Uuid
+  userId           String            @map("user_id") @db.Uuid
+  provider         AuthProvider
+  providerId       String            @map("provider_id")
+  email            String
+  linkedAt         DateTime          @default(now()) @map("linked_at")
+  appleCredentials AppleCredential[]
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerId])
   @@index([userId])
   @@map("linked_identities")
+}
+
+/// Revocable Apple credentials never appear in user/profile projections.
+model AppleCredential {
+  identityId            String         @map("identity_id") @db.Uuid
+  clientId              String         @map("client_id")
+  encryptedRefreshToken String         @map("encrypted_refresh_token")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+  identity              LinkedIdentity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+
+  @@id([identityId, clientId])
+  @@map("apple_credentials")
+}
+
+/// Short-lived, single-use challenges bound to the initiating browser/device.
+model AuthChallenge {
+  id             String    @id @default(uuid()) @db.Uuid
+  kind           String
+  client         String
+  nonce          String
+  verifierHash   String    @map("verifier_hash")
+  userId         String?   @map("user_id") @db.Uuid
+  expiresAt      DateTime  @map("expires_at")
+  consumedAt     DateTime? @map("consumed_at")
+  resultUserId   String?   @map("result_user_id") @db.Uuid
+  resultCodeHash String?   @map("result_code_hash")
+  referralCode   String?   @map("referral_code")
+  referralSource String?   @map("referral_source")
+
+  @@index([expiresAt])
+  @@map("auth_challenges")
 }
 
 model RefreshToken {
@@ -500,27 +532,27 @@ enum SharedEntryStatus {
 /// decided; neither party can edit the other's books. Destination details are
 /// only exposed to the recipient, never to the source workspace.
 model SharedEntry {
-  id                String @id @default(uuid()) @db.Uuid
-  sourceEntryId     String? @map("source_entry_id") @db.Uuid
-  recipientUserId   String @map("recipient_user_id") @db.Uuid
+  id                String            @id @default(uuid()) @db.Uuid
+  sourceEntryId     String?           @map("source_entry_id") @db.Uuid
+  recipientUserId   String            @map("recipient_user_id") @db.Uuid
   status            SharedEntryStatus @default(PENDING)
-  sourceVersion     Int @map("source_version")
-  sourceContactId   String @map("source_contact_id") @db.Uuid
-  sourceWorkspaceId String @map("source_workspace_id") @db.Uuid
-  senderName        String @map("sender_name")
+  sourceVersion     Int               @map("source_version")
+  sourceContactId   String            @map("source_contact_id") @db.Uuid
+  sourceWorkspaceId String            @map("source_workspace_id") @db.Uuid
+  senderName        String            @map("sender_name")
   type              EntryType
-  amount            Decimal @db.Decimal(20, 4)
+  amount            Decimal           @db.Decimal(20, 4)
   currency          String
   description       String
-  entryDate         DateTime @map("entry_date")
-  acceptedEntryId   String? @unique @map("accepted_entry_id") @db.Uuid
-  responseReason    String? @map("response_reason")
-  respondedAt       DateTime? @map("responded_at")
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  entryDate         DateTime          @map("entry_date")
+  acceptedEntryId   String?           @unique @map("accepted_entry_id") @db.Uuid
+  responseReason    String?           @map("response_reason")
+  respondedAt       DateTime?         @map("responded_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
 
   sourceEntry   Entry? @relation("SharedEntrySource", fields: [sourceEntryId], references: [id], onDelete: SetNull)
-  recipientUser User @relation("SharedEntryRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  recipientUser User   @relation("SharedEntryRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
   acceptedEntry Entry? @relation("SharedEntryResult", fields: [acceptedEntryId], references: [id], onDelete: SetNull)
 
   @@unique([sourceEntryId, recipientUserId])
@@ -1310,19 +1342,19 @@ enum SubscriptionStatus {
 /// One row per account that has ever chosen a plan. No row means Free, so
 /// every existing user is on it without a backfill.
 model UserSubscription {
-  id     String             @id @default(uuid()) @db.Uuid
-  userId String             @unique @map("user_id") @db.Uuid
-  plan   SubscriptionPlan   @default(FREE)
-  status SubscriptionStatus @default(ACTIVE)
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @unique @map("user_id") @db.Uuid
+  plan               SubscriptionPlan   @default(FREE)
+  status             SubscriptionStatus @default(ACTIVE)
   /// Storage added on top of the plan's included amount, per workspace, in GB,
   /// in 0.5 GB steps. Bounded by the plan's own maximum (see plans.ts).
-  extraStorageGb    Decimal   @default(0) @map("extra_storage_gb") @db.Decimal(6, 1)
+  extraStorageGb     Decimal            @default(0) @map("extra_storage_gb") @db.Decimal(6, 1)
   /// The paid period. Null while nothing has been paid for (Free, or a plan
   /// chosen before payments went live).
-  currentPeriodStart DateTime? @map("current_period_start")
-  currentPeriodEnd   DateTime? @map("current_period_end")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  currentPeriodStart DateTime?          @map("current_period_start")
+  currentPeriodEnd   DateTime?          @map("current_period_end")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1340,24 +1372,24 @@ enum SubscriptionPaymentStatus {
 /// plan — so a provider calling back twice can't extend it twice. Nothing is
 /// written while payments are off.
 model SubscriptionPayment {
-  id        String                    @id @default(uuid()) @db.Uuid
-  userId    String                    @map("user_id") @db.Uuid
+  id                String                    @id @default(uuid()) @db.Uuid
+  userId            String                    @map("user_id") @db.Uuid
   /// Ours, sent to the provider and echoed back in its confirmation.
-  reference String                    @unique
-  provider  String
+  reference         String                    @unique
+  provider          String
   /// The provider's own id for the transaction, once it gives one.
-  providerReference String?           @map("provider_reference")
-  plan      SubscriptionPlan
-  extraStorageGb Decimal              @default(0) @map("extra_storage_gb") @db.Decimal(6, 1)
+  providerReference String?                   @map("provider_reference")
+  plan              SubscriptionPlan
+  extraStorageGb    Decimal                   @default(0) @map("extra_storage_gb") @db.Decimal(6, 1)
   /// Whole shillings, computed by the server from the plan catalogue.
-  amountUgx Int                       @map("amount_ugx")
+  amountUgx         Int                       @map("amount_ugx")
   /// Masked ("+256 77• ••• 567"): enough to recognise, not to reuse.
-  phoneMasked String                  @map("phone_masked")
-  status    SubscriptionPaymentStatus @default(PENDING)
-  failureReason String?               @map("failure_reason")
-  settledAt DateTime?                 @map("settled_at")
-  createdAt DateTime                  @default(now()) @map("created_at")
-  updatedAt DateTime                  @updatedAt @map("updated_at")
+  phoneMasked       String                    @map("phone_masked")
+  status            SubscriptionPaymentStatus @default(PENDING)
+  failureReason     String?                   @map("failure_reason")
+  settledAt         DateTime?                 @map("settled_at")
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1623,6 +1655,7 @@ enum AuthProvider {
   LOCAL
   GOOGLE
   OC
+  APPLE
 }
 
 // ─── Inventory Subsystem ────────────────────────────────

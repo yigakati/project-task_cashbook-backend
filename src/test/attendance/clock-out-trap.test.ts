@@ -15,7 +15,7 @@
  * jointly encode: an open session always has at least one legal exit available
  * to the person it belongs to.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetDatabase, testPrisma } from '../setup';
 import { resolveService } from '../container';
 import { TimeTrackingService } from '../../modules/time-tracking/time-tracking.service';
@@ -31,6 +31,7 @@ import { WorkspaceRole } from '@prisma/client';
 import { clearClockCache } from '../../core/time/workspace-clock';
 
 const service = () => resolveService(TimeTrackingService);
+afterEach(() => vi.useRealTimers());
 
 beforeEach(async () => {
     await resetDatabase();
@@ -59,6 +60,9 @@ describe('a clock-out is never refused', () => {
     });
 
     it('records how early the departure was instead of blocking it', async () => {
+        // Keep the session on today's business date even around midnight.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-04T09:00:00.000Z'));
         const user = await createUser();
         // 23:59 local: any clock-out today is "early".
         const workspace = await createWorkspace(user.id, {
@@ -93,7 +97,7 @@ describe('a clock-out is never refused', () => {
         await createOpenWorkSession(workspace.id, user.id);
 
         const closed = await service().clockOut(workspace.id, user.id, {
-            latitude: 1.5,   // ~128 km away
+            latitude: 1.5, // ~128 km away
             longitude: 33.5,
         });
 

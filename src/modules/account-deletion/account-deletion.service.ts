@@ -1,12 +1,8 @@
+import { revokeAppleCredential } from '../auth/apple.provider';
 import { injectable, inject } from 'tsyringe';
 import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import {
-    AccountDeletionSource,
-    AccountDeletionStatus,
-    Prisma,
-    PrismaClient,
-} from '@prisma/client';
+import { AccountDeletionSource, AccountDeletionStatus, Prisma, PrismaClient } from '@prisma/client';
 import { config, superAdminEmails } from '../../config';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
@@ -33,7 +29,10 @@ const S = AccountDeletionStatus;
 
 /** A request still in play: at most one of these per person (partial unique index). */
 export const OPEN_DELETION_STATUSES: AccountDeletionStatus[] = [
-    S.PENDING_VERIFICATION, S.SCHEDULED, S.PROCESSING, S.BLOCKED,
+    S.PENDING_VERIFICATION,
+    S.SCHEDULED,
+    S.PROCESSING,
+    S.BLOCKED,
 ];
 
 /** How long an emailed confirmation link stays valid. */
@@ -58,7 +57,11 @@ export interface DeletionPlan {
     blockers: AccountDeletionBlocker[];
     /** Workspaces removed entirely: personal, sole-member, or already deleted. */
     workspacesToDelete: Array<{
-        id: string; name: string; type: string; cashbooks: number; entries: number;
+        id: string;
+        name: string;
+        type: string;
+        cashbooks: number;
+        entries: number;
     }>;
     /** Businesses the person leaves; their records there stay with the business. */
     membershipsToLeave: Array<{ workspaceId: string; name: string; role: string }>;
@@ -108,7 +111,7 @@ export class AccountDeletionService {
     constructor(
         @inject('PrismaClient') private prisma: PrismaClient,
         private storage: StorageService,
-    ) { }
+    ) {}
 
     // ─── What deleting would do ────────────────────────
 
@@ -123,7 +126,10 @@ export class AccountDeletionService {
             db.workspace.findMany({
                 where: { ownerId: userId },
                 select: {
-                    id: true, name: true, type: true, isActive: true,
+                    id: true,
+                    name: true,
+                    type: true,
+                    isActive: true,
                     _count: { select: { cashbooks: true } },
                     members: { where: { userId: { not: userId } }, select: { userId: true } },
                 },
@@ -138,7 +144,8 @@ export class AccountDeletionService {
         if (user.isSuperAdmin || superAdminEmails().includes(user.email.toLowerCase())) {
             blockers.push({
                 code: 'SUPER_ADMIN',
-                message: 'Superadmin accounts cannot be deleted. Remove the address from SUPER_ADMIN_EMAILS first.',
+                message:
+                    'Superadmin accounts cannot be deleted. Remove the address from SUPER_ADMIN_EMAILS first.',
             });
         }
 
@@ -149,14 +156,22 @@ export class AccountDeletionService {
         if (shared.length > 0) {
             blockers.push({
                 code: 'OWNS_SHARED_WORKSPACE',
-                message: `Transfer ownership of ${shared.map((w) => `"${w.name}"`).join(', ')} to another member first — `
-                    + 'other people still work in it.',
-                workspaces: shared.map((w) => ({ id: w.id, name: w.name, otherMembers: w.members.length })),
+                message:
+                    `Transfer ownership of ${shared.map((w) => `"${w.name}"`).join(', ')} to another member first — ` +
+                    'other people still work in it.',
+                workspaces: shared.map((w) => ({
+                    id: w.id,
+                    name: w.name,
+                    otherMembers: w.members.length,
+                })),
             });
         }
 
         const purge = owned.filter((w) => !w.isActive || w.members.length === 0);
-        const entryCounts = purge.length === 0 ? [] : await db.$queryRaw<Array<{ workspace_id: string; n: bigint }>>`
+        const entryCounts =
+            purge.length === 0
+                ? []
+                : await db.$queryRaw<Array<{ workspace_id: string; n: bigint }>>`
             SELECT c.workspace_id, COUNT(e.id)::bigint AS n
             FROM cashbooks c JOIN entries e ON e.cashbook_id = c.id
             WHERE c.workspace_id = ANY(${purge.map((w) => w.id)}::uuid[])
@@ -173,7 +188,9 @@ export class AccountDeletionService {
                 entries: entriesBy.get(w.id) ?? 0,
             })),
             membershipsToLeave: memberships.map((m) => ({
-                workspaceId: m.workspace.id, name: m.workspace.name, role: m.role,
+                workspaceId: m.workspace.id,
+                name: m.workspace.name,
+                role: m.role,
             })),
         };
     }
@@ -185,7 +202,10 @@ export class AccountDeletionService {
         const [open, plan, user] = await Promise.all([
             this.findOpen(userId),
             this.plan(userId),
-            this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } }),
+            this.prisma.user.findUniqueOrThrow({
+                where: { id: userId },
+                select: { passwordHash: true },
+            }),
         ]);
         return {
             request: open ? this.toView(open) : null,
@@ -212,7 +232,11 @@ export class AccountDeletionService {
                 throw new AppError('That password is not correct.', 400, 'INVALID_PASSWORD');
             }
         } else if (dto.confirmEmail?.trim().toLowerCase() !== user.email.toLowerCase()) {
-            throw new AppError('Type your account email exactly to confirm.', 400, 'CONFIRMATION_MISMATCH');
+            throw new AppError(
+                'Type your account email exactly to confirm.',
+                400,
+                'CONFIRMATION_MISMATCH',
+            );
         }
 
         const plan = await this.plan(userId);
@@ -243,7 +267,11 @@ export class AccountDeletionService {
      */
     async requestFromWeb(dto: { email: string; reason?: string }): Promise<void> {
         const user = await this.prisma.user.findFirst({
-            where: { email: { equals: dto.email.trim(), mode: 'insensitive' }, deletedAt: null, isActive: true },
+            where: {
+                email: { equals: dto.email.trim(), mode: 'insensitive' },
+                deletedAt: null,
+                isActive: true,
+            },
         });
         if (!user) {
             logger.info('[AccountDeletion] Web request for an address with no active account');
@@ -269,12 +297,18 @@ export class AccountDeletionService {
                 await this.prisma.accountDeletionRequest.update({ where: { id: open.id }, data });
             } else {
                 await this.prisma.accountDeletionRequest.create({
-                    data: { ...data, userId: user.id, source: AccountDeletionSource.WEB, status: S.PENDING_VERIFICATION },
+                    data: {
+                        ...data,
+                        userId: user.id,
+                        source: AccountDeletionSource.WEB,
+                        status: S.PENDING_VERIFICATION,
+                    },
                 });
             }
         } catch (error) {
             // Two submissions racing: the other one created the request.
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return;
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
+                return;
             throw error;
         }
 
@@ -288,11 +322,15 @@ export class AccountDeletionService {
             },
         });
 
-        await this.notify(user.email, 'Confirm your account deletion', accountDeletionVerifyEmailTemplate({
-            firstName: user.firstName,
-            confirmUrl: appUrl(`/delete-account/confirm?token=${encodeURIComponent(token)}`),
-            expiresInHours: VERIFICATION_TTL_HOURS,
-        }));
+        await this.notify(
+            user.email,
+            'Confirm your account deletion',
+            accountDeletionVerifyEmailTemplate({
+                firstName: user.firstName,
+                confirmUrl: appUrl(`/delete-account/confirm?token=${encodeURIComponent(token)}`),
+                expiresInHours: VERIFICATION_TTL_HOURS,
+            }),
+        );
     }
 
     /** The emailed link: proves the requester controls the account's address. */
@@ -302,14 +340,22 @@ export class AccountDeletionService {
             include: { user: true },
         });
         if (!request || request.status !== S.PENDING_VERIFICATION || request.user.deletedAt) {
-            throw new AppError('This link is not valid or has already been used.', 400, 'INVALID_TOKEN');
+            throw new AppError(
+                'This link is not valid or has already been used.',
+                400,
+                'INVALID_TOKEN',
+            );
         }
         if (!request.verificationExpiresAt || request.verificationExpiresAt < new Date()) {
             await this.prisma.accountDeletionRequest.update({
                 where: { id: request.id },
                 data: { status: S.EXPIRED, verificationTokenHash: null },
             });
-            throw new AppError('This link has expired. Request the deletion again.', 400, 'TOKEN_EXPIRED');
+            throw new AppError(
+                'This link has expired. Request the deletion again.',
+                400,
+                'TOKEN_EXPIRED',
+            );
         }
 
         const plan = await this.plan(request.userId);
@@ -326,14 +372,24 @@ export class AccountDeletionService {
                 },
             });
             if (claimed.count === 0) {
-                throw new AppError('This link is not valid or has already been used.', 400, 'INVALID_TOKEN');
+                throw new AppError(
+                    'This link is not valid or has already been used.',
+                    400,
+                    'INVALID_TOKEN',
+                );
             }
-            await this.audit(request.userId, AuditAction.ACCOUNT_DELETION_BLOCKED, request.id, { blockers: plan.blockers });
-            await this.notify(request.user.email, 'Your account deletion is on hold', accountDeletionBlockedEmailTemplate({
-                firstName: request.user.firstName,
-                reasons: plan.blockers.map((b) => b.message),
-                signInUrl: appUrl('/login'),
-            }));
+            await this.audit(request.userId, AuditAction.ACCOUNT_DELETION_BLOCKED, request.id, {
+                blockers: plan.blockers,
+            });
+            await this.notify(
+                request.user.email,
+                'Your account deletion is on hold',
+                accountDeletionBlockedEmailTemplate({
+                    firstName: request.user.firstName,
+                    reasons: plan.blockers.map((b) => b.message),
+                    signInUrl: appUrl('/login'),
+                }),
+            );
             return { status: S.BLOCKED, scheduledFor: null, blockers: plan.blockers };
         }
 
@@ -341,7 +397,12 @@ export class AccountDeletionService {
         const claimed = await this.prisma.$transaction(async (tx) => {
             const updated = await tx.accountDeletionRequest.updateMany({
                 where: { id: request.id, status: S.PENDING_VERIFICATION },
-                data: { status: S.SCHEDULED, scheduledFor, verifiedAt: new Date(), verificationTokenHash: null },
+                data: {
+                    status: S.SCHEDULED,
+                    scheduledFor,
+                    verifiedAt: new Date(),
+                    verificationTokenHash: null,
+                },
             });
             if (updated.count > 0) {
                 await tx.refreshToken.updateMany({
@@ -352,21 +413,36 @@ export class AccountDeletionService {
             return updated.count;
         });
         if (claimed === 0) {
-            throw new AppError('This link is not valid or has already been used.', 400, 'INVALID_TOKEN');
+            throw new AppError(
+                'This link is not valid or has already been used.',
+                400,
+                'INVALID_TOKEN',
+            );
         }
 
-        await this.audit(request.userId, AuditAction.ACCOUNT_DELETION_VERIFIED, request.id, { scheduledFor });
-        await this.notify(request.user.email, 'Your account is scheduled for deletion', accountDeletionScheduledEmailTemplate({
-            firstName: request.user.firstName,
+        await this.audit(request.userId, AuditAction.ACCOUNT_DELETION_VERIFIED, request.id, {
             scheduledFor,
-            signInUrl: appUrl('/login'),
-        }));
+        });
+        await this.notify(
+            request.user.email,
+            'Your account is scheduled for deletion',
+            accountDeletionScheduledEmailTemplate({
+                firstName: request.user.firstName,
+                scheduledFor,
+                signInUrl: appUrl('/login'),
+            }),
+        );
         return { status: S.SCHEDULED, scheduledFor, blockers: [] as AccountDeletionBlocker[] };
     }
 
     // ─── Superadmin ────────────────────────────────────
 
-    async list(params: { status?: AccountDeletionStatus; search?: string; page: number; limit: number }) {
+    async list(params: {
+        status?: AccountDeletionStatus;
+        search?: string;
+        page: number;
+        limit: number;
+    }) {
         const search = params.search?.trim();
         const where: Prisma.AccountDeletionRequestWhereInput = {
             ...(params.status && { status: params.status }),
@@ -388,7 +464,15 @@ export class AccountDeletionService {
                 skip: (params.page - 1) * params.limit,
                 take: params.limit,
                 include: {
-                    user: { select: { id: true, email: true, firstName: true, lastName: true, deletedAt: true } },
+                    user: {
+                        select: {
+                            id: true,
+                            email: true,
+                            firstName: true,
+                            lastName: true,
+                            deletedAt: true,
+                        },
+                    },
                     handledBy: { select: { firstName: true, lastName: true } },
                 },
             }),
@@ -413,7 +497,15 @@ export class AccountDeletionService {
         const request = await this.prisma.accountDeletionRequest.findUnique({
             where: { id },
             include: {
-                user: { select: { id: true, email: true, firstName: true, lastName: true, deletedAt: true } },
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        firstName: true,
+                        lastName: true,
+                        deletedAt: true,
+                    },
+                },
                 handledBy: { select: { firstName: true, lastName: true } },
             },
         });
@@ -430,7 +522,11 @@ export class AccountDeletionService {
      * someone who lost access to their email. Same grace period as any other
      * request, and they are emailed so they can still object.
      */
-    async scheduleForUser(userId: string, actorId: string, dto: { reason?: string; note?: string }) {
+    async scheduleForUser(
+        userId: string,
+        actorId: string,
+        dto: { reason?: string; note?: string },
+    ) {
         const user = await this.prisma.user.findUnique({ where: { id: userId } });
         if (!user || user.deletedAt) throw new NotFoundError('User');
 
@@ -453,14 +549,24 @@ export class AccountDeletionService {
     async processNow(id: string, actorId: string) {
         const request = await this.prisma.accountDeletionRequest.findUnique({ where: { id } });
         if (!request) throw new NotFoundError('Deletion request');
-        if (!([S.SCHEDULED, S.BLOCKED, S.FAILED] as AccountDeletionStatus[]).includes(request.status)) {
+        if (
+            !([S.SCHEDULED, S.BLOCKED, S.FAILED] as AccountDeletionStatus[]).includes(
+                request.status,
+            )
+        ) {
             throw new AppError(
                 `A ${request.status.toLowerCase().replace('_', ' ')} request cannot be processed.`,
                 409,
                 'INVALID_STATUS',
             );
         }
-        await this.audit(request.userId, AuditAction.ACCOUNT_DELETION_FORCED, id, { actorId }, actorId);
+        await this.audit(
+            request.userId,
+            AuditAction.ACCOUNT_DELETION_FORCED,
+            id,
+            { actorId },
+            actorId,
+        );
         await this.execute(id, { actorId });
         return this.getForAdmin(id);
     }
@@ -492,7 +598,10 @@ export class AccountDeletionService {
                 if (await this.execute(id)) processed += 1;
             } catch (error) {
                 // execute() has already recorded the failure; carry on with the rest.
-                logger.error('[AccountDeletion] Request failed', { id, error: (error as Error).message });
+                logger.error('[AccountDeletion] Request failed', {
+                    id,
+                    error: (error as Error).message,
+                });
             }
         }
         return processed;
@@ -503,18 +612,27 @@ export class AccountDeletionService {
      * (already taken, cancelled, or not yet due).
      */
     async execute(requestId: string, opts: { actorId?: string } = {}): Promise<boolean> {
-        const claimable: AccountDeletionStatus[] = opts.actorId ? [S.SCHEDULED, S.BLOCKED, S.FAILED] : [S.SCHEDULED];
-        const claimed = await this.prisma.accountDeletionRequest.updateMany({
-            where: {
-                id: requestId,
-                status: { in: claimable },
-                ...(!opts.actorId && { scheduledFor: { lte: new Date() } }),
-            },
-            data: {
-                status: S.PROCESSING,
-                attempts: { increment: 1 },
-                ...(opts.actorId && { handledById: opts.actorId }),
-            },
+        const claimable: AccountDeletionStatus[] = opts.actorId
+            ? [S.SCHEDULED, S.BLOCKED, S.FAILED]
+            : [S.SCHEDULED];
+        const claimed = await this.prisma.$transaction(async (tx) => {
+            const request = await tx.accountDeletionRequest.findUnique({
+                where: { id: requestId },
+            });
+            if (!request) return { count: 0 };
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${request.userId}::uuid FOR UPDATE`;
+            return tx.accountDeletionRequest.updateMany({
+                where: {
+                    id: requestId,
+                    status: { in: claimable },
+                    ...(!opts.actorId && { scheduledFor: { lte: new Date() } }),
+                },
+                data: {
+                    status: S.PROCESSING,
+                    attempts: { increment: 1 },
+                    ...(opts.actorId && { handledById: opts.actorId }),
+                },
+            });
         });
         if (claimed.count === 0) return false;
 
@@ -532,123 +650,180 @@ export class AccountDeletionService {
             if (plan.blockers.length > 0) {
                 await this.prisma.accountDeletionRequest.update({
                     where: { id: requestId },
-                    data: { status: S.BLOCKED, blockers: plan.blockers as unknown as Prisma.InputJsonValue },
+                    data: {
+                        status: S.BLOCKED,
+                        blockers: plan.blockers as unknown as Prisma.InputJsonValue,
+                    },
                 });
-                await this.audit(user.id, AuditAction.ACCOUNT_DELETION_BLOCKED, requestId, { blockers: plan.blockers }, opts.actorId);
-                await this.notify(finalEmail, 'Your account deletion is on hold', accountDeletionBlockedEmailTemplate({
-                    firstName,
-                    reasons: plan.blockers.map((b) => b.message),
-                    signInUrl: appUrl('/login'),
-                }));
+                await this.audit(
+                    user.id,
+                    AuditAction.ACCOUNT_DELETION_BLOCKED,
+                    requestId,
+                    { blockers: plan.blockers },
+                    opts.actorId,
+                );
+                await this.notify(
+                    finalEmail,
+                    'Your account deletion is on hold',
+                    accountDeletionBlockedEmailTemplate({
+                        firstName,
+                        reasons: plan.blockers.map((b) => b.message),
+                        signInUrl: appUrl('/login'),
+                    }),
+                );
                 return true;
             }
+
+            // Keep encrypted credentials until revocation succeeds. A failure uses
+            // the existing FAILED state and operator retry, never a silent purge.
+            const appleCredentials = await this.prisma.appleCredential.findMany({
+                where: { identity: { userId: user.id } },
+            });
+            for (const credential of appleCredentials) await revokeAppleCredential(credential);
 
             const workspaceIds = plan.workspacesToDelete.map((w) => w.id);
             // Read before the rows go; removed from storage after the commit.
             const objectKeys = await this.storedObjectKeys(workspaceIds);
 
-            const summary = await this.prisma.$transaction(async (tx) => {
-                const result: DeletionSummary = {
-                    workspacesDeleted: workspaceIds.length,
-                    entriesDeleted: plan.workspacesToDelete.reduce((sum, w) => sum + w.entries, 0),
-                    filesDeleted: objectKeys.length,
-                    membershipsRemoved: 0,
-                    sessionsEnded: 0,
-                };
+            const summary = await this.prisma.$transaction(
+                async (tx) => {
+                    const result: DeletionSummary = {
+                        workspacesDeleted: workspaceIds.length,
+                        entriesDeleted: plan.workspacesToDelete.reduce(
+                            (sum, w) => sum + w.entries,
+                            0,
+                        ),
+                        filesDeleted: objectKeys.length,
+                        membershipsRemoved: 0,
+                        sessionsEnded: 0,
+                    };
 
-                // The ledger is append-only; purging a whole workspace is the
-                // one sanctioned exception, scoped to this transaction.
-                await tx.$executeRawUnsafe(`SET LOCAL app.allow_ledger_maintenance = 'on'`);
-                // Accepted copies belong to their recipients and survive a
-                // source purge. Pending deliveries cannot remain actionable.
-                await tx.sharedEntry.updateMany({
-                    where: { status: 'PENDING', OR: [
-                        { recipientUserId: user.id },
-                        { sourceWorkspaceId: { in: workspaceIds } },
-                        { sourceEntry: { createdById: user.id } },
-                    ] },
-                    data: { status: 'CANCELLED', respondedAt: new Date(), responseReason: 'An account involved in this entry was deleted.' },
-                });
-                for (const workspaceId of workspaceIds) {
-                    await purgeWorkspace(tx, workspaceId);
-                }
+                    // The ledger is append-only; purging a whole workspace is the
+                    // one sanctioned exception, scoped to this transaction.
+                    await tx.$executeRawUnsafe(`SET LOCAL app.allow_ledger_maintenance = 'on'`);
+                    // Accepted copies belong to their recipients and survive a
+                    // source purge. Pending deliveries cannot remain actionable.
+                    await tx.sharedEntry.updateMany({
+                        where: {
+                            status: 'PENDING',
+                            OR: [
+                                { recipientUserId: user.id },
+                                { sourceWorkspaceId: { in: workspaceIds } },
+                                { sourceEntry: { createdById: user.id } },
+                            ],
+                        },
+                        data: {
+                            status: 'CANCELLED',
+                            respondedAt: new Date(),
+                            responseReason: 'An account involved in this entry was deleted.',
+                        },
+                    });
+                    for (const workspaceId of workspaceIds) {
+                        await purgeWorkspace(tx, workspaceId);
+                    }
 
-                result.membershipsRemoved = (await tx.workspaceMember.deleteMany({ where: { userId: user.id } })).count;
-                await tx.cashbookMember.deleteMany({ where: { userId: user.id } });
-                await tx.projectMember.deleteMany({ where: { userId: user.id } });
+                    result.membershipsRemoved = (
+                        await tx.workspaceMember.deleteMany({ where: { userId: user.id } })
+                    ).count;
+                    await tx.cashbookMember.deleteMany({ where: { userId: user.id } });
+                    await tx.projectMember.deleteMany({ where: { userId: user.id } });
 
-                result.sessionsEnded = (await tx.refreshToken.deleteMany({ where: { userId: user.id } })).count;
-                await tx.loginHistory.deleteMany({ where: { userId: user.id } });
-                await tx.linkedIdentity.deleteMany({ where: { userId: user.id } });
-                await tx.notification.deleteMany({ where: { userId: user.id } });
-                await tx.pendingInvite.deleteMany({ where: { email: { equals: user.email, mode: 'insensitive' } } });
-                // Contact cards other businesses keep for this person stay
-                // theirs, but no longer point at a live account.
-                await tx.contact.updateMany({ where: { userId: user.id }, data: { userId: null } });
-                // Their own targets in other businesses can never move again.
-                await tx.target.updateMany({
-                    where: { assigneeId: user.id, archivedAt: null },
-                    data: { archivedAt: new Date() },
-                });
-                await tx.referralAgent.updateMany({
-                    where: { userId: user.id, isActive: true },
-                    data: { isActive: false, revokedAt: new Date() },
-                });
-                // The security trail stays; where it was made from does not.
-                await tx.auditLog.updateMany({
-                    where: { userId: user.id },
-                    data: { ipAddress: null, userAgent: null },
-                });
+                    result.sessionsEnded = (
+                        await tx.refreshToken.deleteMany({ where: { userId: user.id } })
+                    ).count;
+                    await tx.loginHistory.deleteMany({ where: { userId: user.id } });
+                    await tx.authChallenge.deleteMany({
+                        where: { OR: [{ userId: user.id }, { resultUserId: user.id }] },
+                    });
+                    await tx.linkedIdentity.deleteMany({ where: { userId: user.id } });
+                    await tx.notification.deleteMany({ where: { userId: user.id } });
+                    await tx.pendingInvite.deleteMany({
+                        where: { email: { equals: user.email, mode: 'insensitive' } },
+                    });
+                    // Contact cards other businesses keep for this person stay
+                    // theirs, but no longer point at a live account.
+                    await tx.contact.updateMany({
+                        where: { userId: user.id },
+                        data: { userId: null },
+                    });
+                    // Their own targets in other businesses can never move again.
+                    await tx.target.updateMany({
+                        where: { assigneeId: user.id, archivedAt: null },
+                        data: { archivedAt: new Date() },
+                    });
+                    await tx.referralAgent.updateMany({
+                        where: { userId: user.id, isActive: true },
+                        data: { isActive: false, revokedAt: new Date() },
+                    });
+                    // The security trail stays; where it was made from does not.
+                    await tx.auditLog.updateMany({
+                        where: { userId: user.id },
+                        data: { ipAddress: null, userAgent: null },
+                    });
 
-                await tx.user.update({
-                    where: { id: user.id },
-                    data: {
-                        email: tombstoneEmail(user.id),
-                        firstName: 'Deleted',
-                        lastName: 'user',
-                        passwordHash: null,
-                        providerId: null,
-                        isActive: false,
-                        isSuperAdmin: false,
-                        emailVerified: false,
-                        lastLoginAt: null,
-                        deletedAt: new Date(),
-                    },
-                });
+                    await tx.user.update({
+                        where: { id: user.id },
+                        data: {
+                            email: tombstoneEmail(user.id),
+                            firstName: 'Deleted',
+                            lastName: 'user',
+                            passwordHash: null,
+                            providerId: null,
+                            isActive: false,
+                            isSuperAdmin: false,
+                            emailVerified: false,
+                            lastLoginAt: null,
+                            deletedAt: new Date(),
+                        },
+                    });
 
-                await tx.accountDeletionRequest.update({
-                    where: { id: requestId },
-                    data: {
-                        status: S.COMPLETED,
-                        completedAt: new Date(),
-                        summary: result as unknown as Prisma.InputJsonValue,
-                        blockers: Prisma.DbNull,
-                        failureReason: null,
-                    },
-                });
-                // Any other open request for this person is now moot.
-                await tx.accountDeletionRequest.updateMany({
-                    where: { userId: user.id, id: { not: requestId }, status: { in: OPEN_DELETION_STATUSES } },
-                    data: { status: S.CANCELLED, cancelledAt: new Date(), adminNote: 'Superseded by a completed deletion' },
-                });
-                await tx.auditLog.create({
-                    data: {
-                        userId: opts.actorId ?? null,
-                        action: AuditAction.ACCOUNT_DELETION_COMPLETED,
-                        resource: 'user',
-                        resourceId: user.id,
-                        details: { requestId, ...result } as unknown as Prisma.InputJsonValue,
-                    },
-                });
+                    await tx.accountDeletionRequest.update({
+                        where: { id: requestId },
+                        data: {
+                            status: S.COMPLETED,
+                            completedAt: new Date(),
+                            summary: result as unknown as Prisma.InputJsonValue,
+                            blockers: Prisma.DbNull,
+                            failureReason: null,
+                        },
+                    });
+                    // Any other open request for this person is now moot.
+                    await tx.accountDeletionRequest.updateMany({
+                        where: {
+                            userId: user.id,
+                            id: { not: requestId },
+                            status: { in: OPEN_DELETION_STATUSES },
+                        },
+                        data: {
+                            status: S.CANCELLED,
+                            cancelledAt: new Date(),
+                            adminNote: 'Superseded by a completed deletion',
+                        },
+                    });
+                    await tx.auditLog.create({
+                        data: {
+                            userId: opts.actorId ?? null,
+                            action: AuditAction.ACCOUNT_DELETION_COMPLETED,
+                            resource: 'user',
+                            resourceId: user.id,
+                            details: { requestId, ...result } as unknown as Prisma.InputJsonValue,
+                        },
+                    });
 
-                return result;
-            }, { timeout: 120_000, maxWait: 10_000 });
+                    return result;
+                },
+                { timeout: 120_000, maxWait: 10_000 },
+            );
 
             // After the commit: none of this can be rolled back, so it must not
             // run unless the database work is final.
             await this.removeObjects(objectKeys);
             await this.clearCachedCodes(user.id);
-            await this.notify(finalEmail, 'Your account has been deleted', accountDeletionCompletedEmailTemplate({ firstName }));
+            await this.notify(
+                finalEmail,
+                'Your account has been deleted',
+                accountDeletionCompletedEmailTemplate({ firstName }),
+            );
             await this.prisma.accountDeletionRequest.update({
                 where: { id: requestId },
                 data: { contactEmail: null },
@@ -662,7 +837,13 @@ export class AccountDeletionService {
                 where: { id: requestId },
                 data: { status: S.FAILED, failureReason: message.slice(0, 1000) },
             });
-            await this.audit(user.id, AuditAction.ACCOUNT_DELETION_FAILED, requestId, { error: message.slice(0, 300) }, opts.actorId);
+            await this.audit(
+                user.id,
+                AuditAction.ACCOUNT_DELETION_FAILED,
+                requestId,
+                { error: message.slice(0, 300) },
+                opts.actorId,
+            );
             logger.error('[AccountDeletion] Failed', { requestId, error: message });
             throw error;
         }
@@ -722,7 +903,10 @@ export class AccountDeletionService {
                         action: AuditAction.ACCOUNT_DELETION_REQUESTED,
                         resource: 'account_deletion',
                         resourceId: user.id,
-                        details: { source: opts.source, scheduledFor } as unknown as Prisma.InputJsonValue,
+                        details: {
+                            source: opts.source,
+                            scheduledFor,
+                        } as unknown as Prisma.InputJsonValue,
                         ipAddress: opts.meta?.ipAddress,
                         userAgent: opts.meta?.userAgent,
                     },
@@ -738,17 +922,26 @@ export class AccountDeletionService {
             throw error;
         }
 
-        await this.notify(user.email, 'Your account is scheduled for deletion', accountDeletionScheduledEmailTemplate({
-            firstName: user.firstName,
-            scheduledFor,
-            signInUrl: appUrl('/login'),
-        }));
+        await this.notify(
+            user.email,
+            'Your account is scheduled for deletion',
+            accountDeletionScheduledEmailTemplate({
+                firstName: user.firstName,
+                scheduledFor,
+                signInUrl: appUrl('/login'),
+            }),
+        );
         return this.toView(request);
     }
 
     private async cancel(
         id: string,
-        opts: { actorId: string; note?: string; byAdmin?: boolean; meta?: { ipAddress?: string; userAgent?: string } },
+        opts: {
+            actorId: string;
+            note?: string;
+            byAdmin?: boolean;
+            meta?: { ipAddress?: string; userAgent?: string };
+        },
     ) {
         const request = await this.prisma.accountDeletionRequest.findUnique({
             where: { id },
@@ -756,7 +949,12 @@ export class AccountDeletionService {
         });
         if (!request) throw new NotFoundError('Deletion request');
 
-        const cancellable: AccountDeletionStatus[] = [S.PENDING_VERIFICATION, S.SCHEDULED, S.BLOCKED, S.FAILED];
+        const cancellable: AccountDeletionStatus[] = [
+            S.PENDING_VERIFICATION,
+            S.SCHEDULED,
+            S.BLOCKED,
+            S.FAILED,
+        ];
         const updated = await this.prisma.accountDeletionRequest.updateMany({
             where: { id, status: { in: cancellable } },
             data: {
@@ -825,10 +1023,12 @@ export class AccountDeletionService {
                 select: { logoKey: true },
             }),
         ]);
-        return [...new Set([
-            ...attachments.map((a) => a.s3Key),
-            ...logos.map((l) => l.logoKey as string),
-        ])];
+        return [
+            ...new Set([
+                ...attachments.map((a) => a.s3Key),
+                ...logos.map((l) => l.logoKey as string),
+            ]),
+        ];
     }
 
     /**
@@ -838,7 +1038,11 @@ export class AccountDeletionService {
     private async removeObjects(keys: string[]) {
         const results = await Promise.allSettled(keys.map((key) => this.storage.deleteObject(key)));
         const failed = results.filter((r) => r.status === 'rejected').length;
-        if (failed > 0) logger.warn('[AccountDeletion] Some stored files could not be removed', { failed, total: keys.length });
+        if (failed > 0)
+            logger.warn('[AccountDeletion] Some stored files could not be removed', {
+                failed,
+                total: keys.length,
+            });
     }
 
     /** One-time codes cached for this person (verification, password reset). */
@@ -847,7 +1051,9 @@ export class AccountDeletionService {
             await getRedisClient().del(`verification:${userId}`, `reset:${userId}`);
         } catch (error) {
             // They expire on their own within minutes; not worth failing over.
-            logger.warn('[AccountDeletion] Could not clear cached codes', { error: (error as Error).message });
+            logger.warn('[AccountDeletion] Could not clear cached codes', {
+                error: (error as Error).message,
+            });
         }
     }
 
@@ -856,7 +1062,10 @@ export class AccountDeletionService {
             await sendEmail({ to, subject, html });
         } catch (error) {
             // The request itself has been recorded; a lost email must not undo it.
-            logger.error('[AccountDeletion] Email failed', { subject, error: (error as Error).message });
+            logger.error('[AccountDeletion] Email failed', {
+                subject,
+                error: (error as Error).message,
+            });
         }
     }
 
@@ -880,10 +1089,22 @@ export class AccountDeletionService {
 
     /** Never sends the token hash or a stale contact address to a client. */
     private toView(r: {
-        id: string; userId: string; source: AccountDeletionSource; status: AccountDeletionStatus;
-        reason: string | null; scheduledFor: Date | null; verifiedAt: Date | null; cancelledAt: Date | null;
-        completedAt: Date | null; adminNote: string | null; blockers: Prisma.JsonValue; summary: Prisma.JsonValue;
-        failureReason: string | null; attempts: number; createdAt: Date; updatedAt: Date;
+        id: string;
+        userId: string;
+        source: AccountDeletionSource;
+        status: AccountDeletionStatus;
+        reason: string | null;
+        scheduledFor: Date | null;
+        verifiedAt: Date | null;
+        cancelledAt: Date | null;
+        completedAt: Date | null;
+        adminNote: string | null;
+        blockers: Prisma.JsonValue;
+        summary: Prisma.JsonValue;
+        failureReason: string | null;
+        attempts: number;
+        createdAt: Date;
+        updatedAt: Date;
     }) {
         return {
             id: r.id,
@@ -1014,7 +1235,8 @@ export async function purgeWorkspace(tx: Prisma.TransactionClient, workspaceId: 
     await tx.$executeRaw`UPDATE accounts SET ledger_account_id = NULL WHERE workspace_id = ${workspaceId}::uuid`;
     await tx.$executeRaw`UPDATE ledger_accounts SET parent_id = NULL WHERE workspace_id = ${workspaceId}::uuid`;
 
-    const tables = (await tx.$queryRaw<Array<{ table_name: string }>>`
+    const tables = (
+        await tx.$queryRaw<Array<{ table_name: string }>>`
         SELECT c.table_name
         FROM information_schema.columns c
         JOIN information_schema.tables t
@@ -1022,7 +1244,8 @@ export async function purgeWorkspace(tx: Prisma.TransactionClient, workspaceId: 
         WHERE c.table_schema = current_schema()
           AND c.column_name = 'workspace_id'
           AND t.table_type = 'BASE TABLE'
-        ORDER BY c.table_name`).map((row) => row.table_name);
+        ORDER BY c.table_name`
+    ).map((row) => row.table_name);
 
     let remaining = await orderForPurge(tx, tables);
     while (remaining.length > 0) {
@@ -1031,7 +1254,10 @@ export async function purgeWorkspace(tx: Prisma.TransactionClient, workspaceId: 
             // Table names come from the catalog, never from input.
             await tx.$executeRawUnsafe('SAVEPOINT purge_step');
             try {
-                await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE workspace_id = $1::uuid`, workspaceId);
+                await tx.$executeRawUnsafe(
+                    `DELETE FROM "${table}" WHERE workspace_id = $1::uuid`,
+                    workspaceId,
+                );
                 await tx.$executeRawUnsafe('RELEASE SAVEPOINT purge_step');
             } catch (error) {
                 await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT purge_step');

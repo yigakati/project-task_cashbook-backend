@@ -433,6 +433,22 @@ describe('targets', () => {
             expect(ended[0][0].body).toContain('0%');
         });
 
+        it('checks targets after local midnight before the UTC date advances', async () => {
+            const dispatch = vi.spyOn(NotificationsService, 'dispatch').mockImplementation(() => {});
+            const { owner, workspace, shop } = await business();
+            const localMidnight = today().startOf('day').toJSDate();
+            await entry(shop.id, owner.id, { day: today(), amount: '100' });
+            const target = await targets().create(workspace.id, owner.id, {
+                ...base, name: 'Local date', amount: '50',
+                period: period(0, 5),
+            });
+            await targets().sendAlerts(new Date(localMidnight.getTime() - 60_000));
+            expect(dispatch.mock.calls.filter(([job]) => job.type === 'TARGET_ACHIEVED')).toHaveLength(0);
+            await targets().sendAlerts(new Date(localMidnight.getTime() + 60_000));
+            expect(dispatch.mock.calls.filter(([job]) => job.type === 'TARGET_ACHIEVED')).toHaveLength(1);
+            expect((await testPrisma.target.findUniqueOrThrow({ where: { id: target.id } })).achievedAt).not.toBeNull();
+        });
+
         it('forgets earlier alerts when the goal itself changes', async () => {
             vi.spyOn(NotificationsService, 'dispatch').mockImplementation(() => {});
             const { owner, workspace, shop } = await business();

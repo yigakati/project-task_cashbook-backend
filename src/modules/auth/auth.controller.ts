@@ -8,19 +8,16 @@ import { accessTokenTtlMs, refreshTokenTtlMs } from '../../core/auth/token-lifet
 
 @injectable()
 export class AuthController {
-    constructor(private authService: AuthService) { }
+    constructor(private authService: AuthService) {}
 
     async register(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const user = await this.authService.register(
-                req.body,
-                req.ip,
-                req.get('user-agent')
-            );
+            const user = await this.authService.register(req.body, req.ip, req.get('user-agent'));
 
             const response: ApiResponse = {
                 success: true,
-                message: 'Registration successful. Please check your email for a verification code.',
+                message:
+                    'Registration successful. Please check your email for a verification code.',
                 data: user,
             };
 
@@ -32,11 +29,7 @@ export class AuthController {
 
     async login(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const result = await this.authService.login(
-                req.body,
-                req.ip,
-                req.get('user-agent')
-            );
+            const result = await this.authService.login(req.body, req.ip, req.get('user-agent'));
 
             // Set cookies
             setAuthCookies(res, result.accessToken, result.refreshToken);
@@ -67,7 +60,7 @@ export class AuthController {
             const result = await this.authService.refreshTokens(
                 refreshToken,
                 req.ip,
-                req.get('user-agent')
+                req.get('user-agent'),
             );
 
             setAuthCookies(res, result.accessToken, result.refreshToken);
@@ -92,7 +85,7 @@ export class AuthController {
                 req.user.userId,
                 req.user.jti,
                 req.ip,
-                req.get('user-agent')
+                req.get('user-agent'),
             );
 
             clearAuthCookies(res);
@@ -110,11 +103,7 @@ export class AuthController {
 
     async logoutAll(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            await this.authService.logoutAll(
-                req.user.userId,
-                req.ip,
-                req.get('user-agent')
-            );
+            await this.authService.logoutAll(req.user.userId, req.ip, req.get('user-agent'));
 
             clearAuthCookies(res);
 
@@ -129,7 +118,11 @@ export class AuthController {
         }
     }
 
-    async changePassword(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async changePassword(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             await this.authService.changePassword(req.user.userId, req.body);
 
@@ -146,7 +139,11 @@ export class AuthController {
         }
     }
 
-    async setupPassword(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async setupPassword(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             await this.authService.setupPassword(req.user.userId, req.body);
 
@@ -164,7 +161,11 @@ export class AuthController {
         }
     }
 
-    async getLoginHistory(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async getLoginHistory(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             const history = await this.authService.getLoginHistory(req.user.userId);
 
@@ -193,12 +194,17 @@ export class AuthController {
         }
     }
 
-    async resendVerification(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async resendVerification(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             await this.authService.resendVerification(req.body.email);
             res.status(StatusCodes.OK).json({
                 success: true,
-                message: 'If that email exists and is unverified, a verification code has been sent',
+                message:
+                    'If that email exists and is unverified, a verification code has been sent',
             });
         } catch (error) {
             next(error);
@@ -206,7 +212,11 @@ export class AuthController {
     }
 
     // ─── Forgot / Reset Password ───────────────────────
-    async forgotPassword(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async forgotPassword(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             await this.authService.forgotPassword(req.body.email);
             res.status(StatusCodes.OK).json({
@@ -218,7 +228,11 @@ export class AuthController {
         }
     }
 
-    async resetPassword(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async resetPassword(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             await this.authService.resetPassword(req.body);
             res.status(StatusCodes.OK).json({
@@ -236,7 +250,7 @@ export class AuthController {
             const result = await this.authService.googleLogin(
                 req.body,
                 req.ip,
-                req.get('user-agent')
+                req.get('user-agent'),
             );
 
             setAuthCookies(res, result.accessToken, result.refreshToken);
@@ -256,11 +270,7 @@ export class AuthController {
     // ─── OC OAuth ───────────────────────────────────────
     async ocLogin(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const result = await this.authService.ocLogin(
-                req.body,
-                req.ip,
-                req.get('user-agent')
-            );
+            const result = await this.authService.ocLogin(req.body, req.ip, req.get('user-agent'));
 
             setAuthCookies(res, result.accessToken, result.refreshToken);
 
@@ -276,15 +286,23 @@ export class AuthController {
         }
     }
 
-    async connectGoogle(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async connectGoogle(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             const user = await this.authService.connectGoogle(
                 req.user.userId,
                 req.body,
                 req.ip,
-                req.get('user-agent')
+                req.get('user-agent'),
             );
-            res.status(StatusCodes.OK).json({ success: true, message: 'Google account connected', data: { user } });
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Google account connected',
+                data: { user },
+            });
         } catch (error) {
             next(error);
         }
@@ -296,9 +314,13 @@ export class AuthController {
                 req.user.userId,
                 req.body,
                 req.ip,
-                req.get('user-agent')
+                req.get('user-agent'),
             );
-            res.status(StatusCodes.OK).json({ success: true, message: 'OC account connected', data: { user } });
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'OC account connected',
+                data: { user },
+            });
         } catch (error) {
             next(error);
         }
@@ -333,7 +355,7 @@ function baseCookieOptions() {
     };
 }
 
-function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
+export function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
     const base = baseCookieOptions();
     // Both lifetimes come from the same config the tokens are signed with, so
     // a cookie can never outlive — or die before — the token it carries.

@@ -15,8 +15,13 @@ import {
 } from '../../core/errors/AppError';
 import { JwtPayload, AuditAction, WorkspaceType } from '../../core/types';
 import {
-    RegisterDto, LoginDto, ChangePasswordDto, SetupPasswordDto,
-    VerifyEmailDto, ForgotPasswordDto, ResetPasswordDto,
+    RegisterDto,
+    LoginDto,
+    ChangePasswordDto,
+    SetupPasswordDto,
+    VerifyEmailDto,
+    ForgotPasswordDto,
+    ResetPasswordDto,
     GoogleLoginDto,
     OcLoginDto,
 } from './auth.dto';
@@ -26,12 +31,17 @@ import { claimPendingContactInvites } from '../contact-links/contact-links.servi
 import { logger } from '../../utils/logger';
 import { getRedisClient } from '../../config/redis';
 import { sendEmail } from '../../config/email';
-import { verificationEmailTemplate, passwordResetEmailTemplate, welcomeEmailTemplate } from '../../utils/emailTemplates';
+import {
+    verificationEmailTemplate,
+    passwordResetEmailTemplate,
+    welcomeEmailTemplate,
+} from '../../utils/emailTemplates';
 import {
     provisionWorkspaceAccounting,
     seedDefaultWalletAccounts,
     seedDefaultCashbook,
 } from '../../core/ledger/coa.seed';
+import { encryptAppleToken, exchangeAppleCode } from './apple.provider';
 import { currencyForCountry } from '../../core/finance';
 
 const SUSPICIOUS_FAILURE_THRESHOLD = 5;
@@ -44,7 +54,7 @@ export class AuthService {
     constructor(
         private authRepository: AuthRepository,
         @inject('PrismaClient') private prisma: PrismaClient,
-    ) { }
+    ) {}
 
     // ─── Register ──────────────────────────────────────
     async register(dto: RegisterDto, ipAddress?: string, userAgent?: string) {
@@ -125,7 +135,9 @@ export class AuthService {
             to: dto.email,
             subject: `Verify your ${config.APP_NAME} account`,
             html: verificationEmailTemplate(dto.firstName, otp),
-        }).catch((err) => logger.error('Failed to send verification email', { email: dto.email, err }));
+        }).catch((err) =>
+            logger.error('Failed to send verification email', { email: dto.email, err }),
+        );
 
         const { passwordHash: _, ...userWithoutPassword } = result;
         return userWithoutPassword;
@@ -152,7 +164,10 @@ export class AuthService {
             where: { id: userId },
             data: { isSuperAdmin: shouldBe },
         });
-        logger.info('Superadmin status synced from configuration', { email, isSuperAdmin: shouldBe });
+        logger.info('Superadmin status synced from configuration', {
+            email,
+            isSuperAdmin: shouldBe,
+        });
         return shouldBe;
     }
 
@@ -198,7 +213,7 @@ export class AuthService {
             });
 
             throw new AuthenticationError(
-                'Account temporarily locked due to too many failed attempts. Please try again later.'
+                'Account temporarily locked due to too many failed attempts. Please try again later.',
             );
         }
 
@@ -311,6 +326,7 @@ export class AuthService {
             firstName: string;
             lastName: string;
             linkedAction: AuditAction;
+            requireExplicitLink?: boolean;
             createdAction: AuditAction;
             /** Consulted only if this call ends up creating the account. */
             referralCode?: string;
@@ -319,7 +335,17 @@ export class AuthService {
             userAgent?: string;
         },
     ) {
-        const { provider, providerId, email, firstName, lastName, linkedAction, createdAction, ipAddress, userAgent } = params;
+        const {
+            provider,
+            providerId,
+            email,
+            firstName,
+            lastName,
+            linkedAction,
+            createdAction,
+            ipAddress,
+            userAgent,
+        } = params;
 
         // Case A: this exact provider identity is already linked to someone.
         const existingIdentity = await tx.linkedIdentity.findUnique({
@@ -340,6 +366,10 @@ export class AuthService {
         const existingUser = await tx.user.findUnique({ where: { email } });
 
         if (existingUser) {
+            if (params.requireExplicitLink)
+                throw new ConflictError(
+                    'An account with this email already exists. Sign in first, then connect Apple from your profile.',
+                );
             if (!existingUser.isActive) {
                 throw new AuthenticationError('Account is deactivated');
             }
@@ -395,9 +425,23 @@ export class AuthService {
                 ownerId: newUser.id,
             },
         });
-        await provisionWorkspaceAccounting(tx, personalWorkspace.id, personalWorkspace.defaultCurrency);
-        await seedDefaultWalletAccounts(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, newUser.id);
-        await seedDefaultCashbook(tx, personalWorkspace.id, personalWorkspace.defaultCurrency, newUser.id);
+        await provisionWorkspaceAccounting(
+            tx,
+            personalWorkspace.id,
+            personalWorkspace.defaultCurrency,
+        );
+        await seedDefaultWalletAccounts(
+            tx,
+            personalWorkspace.id,
+            personalWorkspace.defaultCurrency,
+            newUser.id,
+        );
+        await seedDefaultCashbook(
+            tx,
+            personalWorkspace.id,
+            personalWorkspace.defaultCurrency,
+            newUser.id,
+        );
 
         await tx.auditLog.create({
             data: {
@@ -430,7 +474,7 @@ export class AuthService {
         return { user: newUser, isNewUser: true };
     }
 
-    async ocLogin(dto: OcLoginDto, ipAddress?: string, userAgent?: string) {
+    async ocLogin(dto: OcLoginDto, ipAddress?: string, userAgent?: string, issueSession = true) {
         if (!config.Client_ID || !config.Client_Secret) {
             throw new AppError(
                 'OC sign-in is not configured on this server',
@@ -584,7 +628,14 @@ export class AuthService {
                 to: user.email,
                 subject: `Welcome to ${config.APP_NAME}!`,
                 html: welcomeEmailTemplate(user.firstName),
-            }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
+            }).catch((err) =>
+                logger.error('Failed to send onboarding email', { email: user.email, err }),
+            );
+        }
+
+        if (!issueSession) {
+            const { passwordHash: _, ...safeUser } = user;
+            return { user: safeUser, accessToken: '', refreshToken: '' };
         }
 
         // Generate tokens
@@ -679,7 +730,13 @@ export class AuthService {
     }
 
     // ─── Logout ────────────────────────────────────────
-    async logout(refreshToken: string, userId: string, jti?: string, ipAddress?: string, userAgent?: string) {
+    async logout(
+        refreshToken: string,
+        userId: string,
+        jti?: string,
+        ipAddress?: string,
+        userAgent?: string,
+    ) {
         if (refreshToken) {
             const tokenHash = this.hashToken(refreshToken);
             const storedToken = await this.authRepository.findRefreshTokenByHash(tokenHash);
@@ -818,7 +875,9 @@ export class AuthService {
             to: user.email,
             subject: `Welcome to ${config.APP_NAME}!`,
             html: welcomeEmailTemplate(user.firstName),
-        }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
+        }).catch((err) =>
+            logger.error('Failed to send onboarding email', { email: user.email, err }),
+        );
 
         await this.prisma.auditLog.create({
             data: {
@@ -904,7 +963,11 @@ export class AuthService {
     }
 
     // ─── Token Helpers ─────────────────────────────────
-    private generateAccessToken(user: { id: string; email: string; isSuperAdmin: boolean }): string {
+    private generateAccessToken(user: {
+        id: string;
+        email: string;
+        isSuperAdmin: boolean;
+    }): string {
         const jti = crypto.randomUUID();
         const payload: JwtPayload = {
             userId: user.id,
@@ -977,7 +1040,12 @@ export class AuthService {
     }
 
     // ─── Google OAuth ────────────────────────────────────────
-    async googleLogin(dto: GoogleLoginDto, ipAddress?: string, userAgent?: string) {
+    async googleLogin(
+        dto: GoogleLoginDto,
+        ipAddress?: string,
+        userAgent?: string,
+        issueSession = true,
+    ) {
         const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
 
         let payload;
@@ -1044,7 +1112,14 @@ export class AuthService {
                 to: user.email,
                 subject: `Welcome to ${config.APP_NAME}!`,
                 html: welcomeEmailTemplate(user.firstName),
-            }).catch((err) => logger.error('Failed to send onboarding email', { email: user.email, err }));
+            }).catch((err) =>
+                logger.error('Failed to send onboarding email', { email: user.email, err }),
+            );
+        }
+
+        if (!issueSession) {
+            const { passwordHash: _, ...safeUser } = user;
+            return { user: safeUser, accessToken: '', refreshToken: '' };
         }
 
         // Generate tokens (using existing token system)
@@ -1085,8 +1160,170 @@ export class AuthService {
             refreshToken,
         };
     }
+    async appleLogin(
+        dto: {
+            code: string;
+            client: 'web' | 'ios';
+            nonce: string;
+            firstName?: string;
+            lastName?: string;
+            referralCode?: string;
+            referralSource?: 'LINK' | 'CODE';
+        },
+        ipAddress?: string,
+        userAgent?: string,
+        connectUserId?: string,
+    ) {
+        const apple = await exchangeAppleCode(dto.code, dto.client, dto.nonce);
+        const user = await this.prisma.$transaction(async (tx) => {
+            // Serialize identity creation, including two devices granting consent together.
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`apple:${apple.subject}`}, 0))`;
+            const identity = await tx.linkedIdentity.findUnique({
+                where: { provider_providerId: { provider: 'APPLE', providerId: apple.subject } },
+                include: { user: true },
+            });
+            if (identity && connectUserId && identity.userId !== connectUserId) {
+                throw new ConflictError('This Apple account is already connected to another user');
+            }
+            const knownUserId = identity?.userId ?? connectUserId;
+            if (knownUserId) {
+                await tx.$queryRaw`SELECT id FROM users WHERE id = ${knownUserId}::uuid FOR UPDATE`;
+                const existing = await tx.user.findUnique({ where: { id: knownUserId } });
+                if (
+                    !existing?.isActive ||
+                    existing.deletedAt ||
+                    (await tx.accountDeletionRequest.findFirst({
+                        where: { userId: knownUserId, status: 'PROCESSING' },
+                    }))
+                ) {
+                    throw new AuthenticationError('This account is inactive or being deleted');
+                }
+            }
+            let user;
+            if (identity) {
+                user = identity.user;
+            } else if (connectUserId) {
+                user = await tx.user.findUniqueOrThrow({ where: { id: connectUserId } });
+                await tx.linkedIdentity.create({
+                    data: {
+                        userId: user.id,
+                        provider: 'APPLE',
+                        providerId: apple.subject,
+                        email: apple.email ?? user.email,
+                    },
+                });
+            } else {
+                if (!apple.email)
+                    throw new AuthenticationError(
+                        'Apple did not supply an email. Reauthorize InChange in your Apple account settings.',
+                    );
+                // Email alone is not consent to merge accounts. This also keeps a
+                // private relay address from silently changing an existing account.
+                const existing = await tx.user.findFirst({
+                    where: { email: { equals: apple.email, mode: 'insensitive' } },
+                });
+                if (existing)
+                    throw new ConflictError(
+                        'An account with this email already exists. Sign in to it first, then connect Apple from your profile.',
+                    );
+                ({ user } = await this.resolveOAuthUser(tx, {
+                    provider: 'APPLE',
+                    providerId: apple.subject,
+                    email: apple.email,
+                    requireExplicitLink: true,
+                    firstName: dto.firstName?.trim() || 'Apple',
+                    lastName: dto.lastName?.trim() || 'User',
+                    linkedAction: AuditAction.APPLE_ACCOUNT_LINKED,
+                    createdAction: AuditAction.APPLE_ACCOUNT_CREATED,
+                    referralCode: dto.referralCode,
+                    referralSource: dto.referralSource,
+                    ipAddress,
+                    userAgent,
+                }));
+            }
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR UPDATE`;
+            const active = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+            if (
+                !active.isActive ||
+                active.deletedAt ||
+                (await tx.accountDeletionRequest.findFirst({
+                    where: { userId: user.id, status: 'PROCESSING' },
+                }))
+            ) {
+                throw new AuthenticationError('This account is inactive or being deleted');
+            }
+            const linked = await tx.linkedIdentity.findUniqueOrThrow({
+                where: { provider_providerId: { provider: 'APPLE', providerId: apple.subject } },
+            });
+            const credential = {
+                clientId: apple.clientId,
+                encryptedRefreshToken: encryptAppleToken(
+                    apple.refreshToken,
+                    linked.id,
+                    apple.clientId,
+                ),
+            };
+            await tx.appleCredential.upsert({
+                where: { identityId_clientId: { identityId: linked.id, clientId: apple.clientId } },
+                create: { identityId: linked.id, ...credential },
+                update: credential,
+            });
+            await tx.auditLog.create({
+                data: {
+                    userId: user.id,
+                    resource: 'auth',
+                    action: connectUserId
+                        ? AuditAction.APPLE_ACCOUNT_LINKED
+                        : AuditAction.APPLE_LOGIN_SUCCESS,
+                    ipAddress,
+                    userAgent,
+                },
+            });
+            return active;
+        });
+        return this.createOAuthSession(user.id, ipAddress, userAgent);
+    }
+
+    async createOAuthSession(userId: string, ipAddress?: string, userAgent?: string) {
+        return this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+            const user = await tx.user.findUnique({ where: { id: userId } });
+            if (
+                !user?.isActive ||
+                user.deletedAt ||
+                (await tx.accountDeletionRequest.findFirst({
+                    where: { userId, status: 'PROCESSING' },
+                }))
+            ) {
+                throw new AuthenticationError('Account is inactive or being deleted');
+            }
+            const accessToken = this.generateAccessToken(user);
+            const { token: refreshToken, hash } = this.generateRefreshToken();
+            await tx.refreshToken.create({
+                data: {
+                    userId,
+                    tokenHash: hash,
+                    deviceInfo: userAgent,
+                    ipAddress,
+                    expiresAt: this.parseExpiryToDate(config.JWT_REFRESH_EXPIRY),
+                },
+            });
+            await tx.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+            await tx.loginHistory.create({
+                data: { userId, ipAddress, userAgent, status: 'SUCCESS' },
+            });
+            const { passwordHash: _, ...safeUser } = user;
+            return { user: safeUser, accessToken, refreshToken };
+        });
+    }
+
     // ─── OAuth Connection ──────────────────────────────────────
-    async connectGoogle(userId: string, dto: GoogleLoginDto, ipAddress?: string, userAgent?: string) {
+    async connectGoogle(
+        userId: string,
+        dto: GoogleLoginDto,
+        ipAddress?: string,
+        userAgent?: string,
+    ) {
         const googleClient = new OAuth2Client();
         let payload;
         try {
@@ -1105,7 +1342,9 @@ export class AuthService {
         }
 
         const existingLink = await this.prisma.linkedIdentity.findUnique({
-            where: { provider_providerId: { provider: AuthProvider.GOOGLE, providerId: googleSub } },
+            where: {
+                provider_providerId: { provider: AuthProvider.GOOGLE, providerId: googleSub },
+            },
         });
 
         if (existingLink && existingLink.userId !== userId) {
@@ -1142,7 +1381,7 @@ export class AuthService {
 
     async connectOc(userId: string, dto: OcLoginDto, ipAddress?: string, userAgent?: string) {
         const OC_BASE = 'https://oc.odixtec.com';
-        
+
         let tokenData: any;
         try {
             const tokenRes = await fetch(`${OC_BASE}/api/oauth/token`, {
@@ -1185,7 +1424,9 @@ export class AuthService {
         }
 
         const existingLink = await this.prisma.linkedIdentity.findUnique({
-            where: { provider_providerId: { provider: AuthProvider.OC, providerId: ocSub.toString() } },
+            where: {
+                provider_providerId: { provider: AuthProvider.OC, providerId: ocSub.toString() },
+            },
         });
 
         if (existingLink && existingLink.userId !== userId) {

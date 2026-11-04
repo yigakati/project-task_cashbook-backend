@@ -95,6 +95,15 @@ const envSchema = z.object({
     LEDGER_MODE: z.enum(['off', 'shadow', 'on']).default('on'),
 
     GOOGLE_CLIENT_ID: z.string().default(''),
+    APPLE_TEAM_ID: z.string().default(''),
+    APPLE_KEY_ID: z.string().default(''),
+    APPLE_PRIVATE_KEY: z.string().default(''),
+    APPLE_WEB_CLIENT_ID: z.string().default(''),
+    APPLE_IOS_CLIENT_ID: z.string().default('com.odixtec.inchange'),
+    APPLE_REDIRECT_URI: z.string().default(''),
+    // Dedicated 32-byte base64 AES key; retain it while credentials exist.
+    APPLE_TOKEN_ENCRYPTION_KEY: z.string().default(''),
+    MOBILE_AUTH_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 
     /**
      * OC (OpenChat) OAuth. Names kept exactly as they already exist in this

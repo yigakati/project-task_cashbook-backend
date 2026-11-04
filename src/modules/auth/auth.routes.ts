@@ -1,3 +1,4 @@
+import deviceAuthRoutes from './device-auth.routes';
 import { Router } from 'express';
 import { container } from 'tsyringe';
 import { AuthController } from './auth.controller';
@@ -18,6 +19,7 @@ import {
 } from './auth.dto';
 
 const router = Router();
+router.use(deviceAuthRoutes);
 const authController = container.resolve(AuthController);
 
 // Public routes
@@ -25,28 +27,24 @@ router.post(
     '/register',
     authRateLimiter,
     validate(registerSchema),
-    authController.register.bind(authController) as any
+    authController.register.bind(authController) as any,
 );
 
 router.post(
     '/login',
     authRateLimiter,
     validate(loginSchema),
-    authController.login.bind(authController) as any
+    authController.login.bind(authController) as any,
 );
 
-router.post(
-    '/refresh',
-    authRateLimiter,
-    authController.refresh.bind(authController) as any
-);
+router.post('/refresh', authRateLimiter, authController.refresh.bind(authController) as any);
 
 // Google OAuth
 router.post(
     '/google',
     authRateLimiter,
     validate(googleLoginSchema),
-    authController.googleLogin.bind(authController) as any
+    authController.googleLogin.bind(authController) as any,
 );
 
 // OC OAuth
@@ -54,7 +52,7 @@ router.post(
     '/oc',
     authRateLimiter,
     validate(ocLoginSchema),
-    authController.ocLogin.bind(authController) as any
+    authController.ocLogin.bind(authController) as any,
 );
 
 // Email verification
@@ -62,14 +60,14 @@ router.post(
     '/verify-email',
     authRateLimiter,
     validate(verifyEmailSchema),
-    authController.verifyEmail.bind(authController) as any
+    authController.verifyEmail.bind(authController) as any,
 );
 
 router.post(
     '/resend-verification',
     otpRateLimiter,
     validate(resendVerificationSchema),
-    authController.resendVerification.bind(authController) as any
+    authController.resendVerification.bind(authController) as any,
 );
 
 // Forgot / reset password
@@ -77,34 +75,30 @@ router.post(
     '/forgot-password',
     otpRateLimiter,
     validate(forgotPasswordSchema),
-    authController.forgotPassword.bind(authController) as any
+    authController.forgotPassword.bind(authController) as any,
 );
 
 router.post(
     '/reset-password',
     authRateLimiter,
     validate(resetPasswordSchema),
-    authController.resetPassword.bind(authController) as any
+    authController.resetPassword.bind(authController) as any,
 );
 
 // Protected routes
-router.post(
-    '/logout',
-    authenticate as any,
-    authController.logout.bind(authController) as any
-);
+router.post('/logout', authenticate as any, authController.logout.bind(authController) as any);
 
 router.post(
     '/logout-all',
     authenticate as any,
-    authController.logoutAll.bind(authController) as any
+    authController.logoutAll.bind(authController) as any,
 );
 
 router.post(
     '/change-password',
     authenticate as any,
     validate(changePasswordSchema),
-    authController.changePassword.bind(authController) as any
+    authController.changePassword.bind(authController) as any,
 );
 
 // For Google/OC-only accounts that have no password yet — see
@@ -114,27 +108,27 @@ router.post(
     '/setup-password',
     authenticate as any,
     validate(setupPasswordSchema),
-    authController.setupPassword.bind(authController) as any
+    authController.setupPassword.bind(authController) as any,
 );
 
 router.get(
     '/login-history',
     authenticate as any,
-    authController.getLoginHistory.bind(authController) as any
+    authController.getLoginHistory.bind(authController) as any,
 );
 
 router.post(
     '/connect/google',
     authenticate as any,
     validate(googleLoginSchema),
-    authController.connectGoogle.bind(authController) as any
+    authController.connectGoogle.bind(authController) as any,
 );
 
 router.post(
     '/connect/oc',
     authenticate as any,
     validate(ocLoginSchema),
-    authController.connectOc.bind(authController) as any
+    authController.connectOc.bind(authController) as any,
 );
 
 export default router;

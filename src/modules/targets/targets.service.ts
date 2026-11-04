@@ -542,7 +542,9 @@ export class TargetsService {
 
     async sendAlerts(now = new Date()): Promise<number> {
         const targets = await this.prisma.target.findMany({
-            where: { archivedAt: null, alertsEnabled: true, endedNotifiedAt: null, startDate: { lte: now } },
+            // Date-only start dates are UTC-midnight values; include tomorrow UTC
+            // for workspaces whose local date has already advanced, then filter locally.
+            where: { archivedAt: null, alertsEnabled: true, endedNotifiedAt: null, startDate: { lte: new Date(now.getTime() + 86_400_000) } },
             include: TARGET_INCLUDE,
         });
 
@@ -559,6 +561,7 @@ export class TargetsService {
 
     private async alertOne(target: TargetRow, now: Date): Promise<number> {
         const { today, timezone } = await this.workspaceToday(target.workspaceId, now);
+        if (today < dateOf(target.startDate)) return 0;
         const progress = await this.progressFor(target, today, timezone);
         const money = (value: string) => formatAmount(value, target.currency);
         const ended = today > dateOf(target.endDate);

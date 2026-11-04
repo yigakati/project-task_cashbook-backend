@@ -31,7 +31,9 @@
     "format:housing": "prettier --write \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\"",
     "format:housing:check": "prettier --check \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\"",
     "format:receipts": "prettier --write \"src/modules/entries/entries.{controller,dto,routes,service}.ts\" \"src/modules/entries/receipt*.ts\" \"src/test/entries/receipt*.ts\" \"scripts/copy-receipt-assets.cjs\"",
-    "format:receipts:check": "prettier --check \"src/modules/entries/entries.{controller,dto,routes,service}.ts\" \"src/modules/entries/receipt*.ts\" \"src/test/entries/receipt*.ts\" \"scripts/copy-receipt-assets.cjs\""
+    "format:receipts:check": "prettier --check \"src/modules/entries/entries.{controller,dto,routes,service}.ts\" \"src/modules/entries/receipt*.ts\" \"src/test/entries/receipt*.ts\" \"scripts/copy-receipt-assets.cjs\"",
+    "format:apple": "prettier --write src/modules/auth/apple.provider.ts src/modules/auth/device-auth.routes.ts src/modules/auth/auth.service.ts src/modules/auth/auth.routes.ts src/modules/auth/auth.controller.ts src/modules/account-deletion/account-deletion.service.ts src/test/auth/apple-auth.test.ts src/test/auth/apple-migration.test.ts",
+    "format:apple:check": "prettier --check src/modules/auth/apple.provider.ts src/modules/auth/device-auth.routes.ts src/modules/auth/auth.service.ts src/modules/auth/auth.routes.ts src/modules/auth/auth.controller.ts src/modules/account-deletion/account-deletion.service.ts src/test/auth/apple-auth.test.ts src/test/auth/apple-migration.test.ts"
   },
   "keywords": [],
   "author": "",
