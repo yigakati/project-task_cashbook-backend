@@ -1,3 +1,5 @@
+import { getPrismaClient } from '../../config/database';
+import { NotFoundError } from '../../core/errors/AppError';
 import { Router } from 'express';
 import { container } from 'tsyringe';
 import { EntriesController } from './entries.controller';
@@ -9,6 +11,7 @@ import { uuidParams } from '../../middlewares/uuidParam';
 import { CashbookPermission } from '../../core/types/permissions';
 import {
     createEntrySchema,
+    sendReceiptSchema,
     updateEntrySchema,
     deleteEntrySchema,
     reviewDeleteRequestSchema,
@@ -21,6 +24,24 @@ const entriesController = container.resolve(EntriesController);
 
 router.use(authenticate as any);
 
+// Run after idempotency replay: a successful move changes the source book,
+// but retrying that request must still return its original result.
+const requireEntryInBook: import('express').RequestHandler = async (req, _res, next) => {
+    try {
+        const entry = await getPrismaClient().entry.findFirst({
+            where: {
+                id: req.params.entryId as string,
+                cashbookId: req.params.cashbookId as string,
+            },
+            select: { id: true },
+        });
+        if (!entry) throw new NotFoundError('Entry in this cashbook');
+        next();
+    } catch (error) {
+        next(error);
+    }
+};
+
 /*
  * Literal paths first. `/:entryId/cashbook/:cashbookId` below has the same
  * shape as `/delete-requests/cashbook/:cashbookId`, and Express matches in
@@ -30,7 +51,7 @@ router.use(authenticate as any);
 router.get(
     '/delete-requests/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.APPROVE_DELETE) as any,
-    entriesController.getDeleteRequests.bind(entriesController) as any
+    entriesController.getDeleteRequests.bind(entriesController) as any,
 );
 
 // ─── Entry CRUD ────────────────────────────────────────
@@ -45,20 +66,20 @@ router.get(
     '/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
     validate(entryQuerySchema, 'query'),
-    entriesController.getAll.bind(entriesController) as any
+    entriesController.getAll.bind(entriesController) as any,
 );
 
 // Who and what the book's entries can be filtered by.
 router.get(
     '/cashbook/:cashbookId/filter-options',
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
-    entriesController.filterOptions.bind(entriesController) as any
+    entriesController.filterOptions.bind(entriesController) as any,
 );
 
 router.get(
     '/:entryId/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
-    entriesController.getOne.bind(entriesController) as any
+    entriesController.getOne.bind(entriesController) as any,
 );
 
 router.post(
@@ -66,7 +87,7 @@ router.post(
     requireCashbookMember(CashbookPermission.CREATE_ENTRY) as any,
     idempotency('POST /entries/cashbook/:cashbookId') as any,
     validate(createEntrySchema),
-    entriesController.create.bind(entriesController) as any
+    entriesController.create.bind(entriesController) as any,
 );
 
 router.patch(
@@ -74,7 +95,8 @@ router.patch(
     requireCashbookMember(CashbookPermission.UPDATE_ENTRY) as any,
     idempotency('PATCH /entries/:entryId/cashbook/:cashbookId') as any,
     validate(updateEntrySchema),
-    entriesController.update.bind(entriesController) as any
+    requireEntryInBook,
+    entriesController.update.bind(entriesController) as any,
 );
 
 /*
@@ -89,7 +111,8 @@ router.patch(
     requireCashbookMember(CashbookPermission.UPDATE_ENTRY) as any,
     idempotency('PATCH /entries/:entryId/cashbook/:cashbookId/reassign') as any,
     validate(reassignEntrySchema),
-    entriesController.reassign.bind(entriesController) as any
+    requireEntryInBook,
+    entriesController.reassign.bind(entriesController) as any,
 );
 
 router.delete(
@@ -97,7 +120,8 @@ router.delete(
     requireCashbookMember(CashbookPermission.DELETE_ENTRY) as any,
     idempotency('DELETE /entries/:entryId/cashbook/:cashbookId') as any,
     validate(deleteEntrySchema),
-    entriesController.delete.bind(entriesController) as any
+    requireEntryInBook,
+    entriesController.delete.bind(entriesController) as any,
 );
 
 // ─── Delete Requests ───────────────────────────────────
@@ -105,14 +129,14 @@ router.post(
     '/delete-requests/:requestId/review/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.APPROVE_DELETE) as any,
     validate(reviewDeleteRequestSchema),
-    entriesController.reviewDeleteRequest.bind(entriesController) as any
+    entriesController.reviewDeleteRequest.bind(entriesController) as any,
 );
 
 // ─── Audit Trail ───────────────────────────────────────
 router.get(
     '/:entryId/audit/cashbook/:cashbookId',
     requireCashbookMember(CashbookPermission.VIEW_AUDIT_LOG) as any,
-    entriesController.getAuditTrail.bind(entriesController) as any
+    entriesController.getAuditTrail.bind(entriesController) as any,
 );
 
 // ─── Receipts ──────────────────────────────────────────
@@ -126,14 +150,21 @@ router.get(
  */
 router.get(
     '/:entryId/receipt/cashbook/:cashbookId',
+    validate(uuidParams('entryId', 'cashbookId'), 'params'),
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
-    entriesController.receiptModel.bind(entriesController) as any
+    entriesController.receiptModel.bind(entriesController) as any,
 );
 
 router.post(
     '/:entryId/receipt/send/cashbook/:cashbookId',
+    validate(uuidParams('entryId', 'cashbookId'), 'params'),
     requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
-    entriesController.sendReceipt.bind(entriesController) as any
+    validate(sendReceiptSchema),
+    (req, res, next) =>
+        idempotency(
+            `POST /entries/${req.params.entryId}/receipt/send/cashbook/${req.params.cashbookId}`,
+        )(req as any, res, next),
+    entriesController.sendReceipt.bind(entriesController) as any,
 );
 
 export default router;

@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only -r tsconfig-paths/register src/server.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-receipt-assets.cjs",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -29,7 +29,9 @@
     "ops:repair-balances": "node dist-scripts/scripts/repair-financial-balances.js",
     "ops:rebuild-attendance": "node dist-scripts/scripts/rebuild-attendance-days.js",
     "format:housing": "prettier --write \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\"",
-    "format:housing:check": "prettier --check \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\""
+    "format:housing:check": "prettier --check \"src/modules/housing/*.ts\" \"src/modules/rental-issues/*.ts\" \"src/jobs/housingScheduler.ts\" \"src/test/housing/*.ts\"",
+    "format:receipts": "prettier --write \"src/modules/entries/entries.{controller,dto,routes,service}.ts\" \"src/modules/entries/receipt*.ts\" \"src/test/entries/receipt*.ts\" \"scripts/copy-receipt-assets.cjs\"",
+    "format:receipts:check": "prettier --check \"src/modules/entries/entries.{controller,dto,routes,service}.ts\" \"src/modules/entries/receipt*.ts\" \"src/test/entries/receipt*.ts\" \"scripts/copy-receipt-assets.cjs\""
   },
   "keywords": [],
   "author": "",

@@ -1,9 +1,11 @@
 import { z } from 'zod';
 
-const decimalString = z.string().regex(
-    /^\d+(\.\d{1,4})?$/,
-    'Amount must be a valid decimal number with up to 4 decimal places'
-);
+const decimalString = z
+    .string()
+    .regex(
+        /^\d+(\.\d{1,4})?$/,
+        'Amount must be a valid decimal number with up to 4 decimal places',
+    );
 
 /**
  * Every entry must say WHERE the money moved.
@@ -36,12 +38,16 @@ export const createEntrySchema = z.object({
     accountId: z.string().uuid({ message: 'Choose the wallet this money moved through' }),
     obligationId: z.string().uuid().optional(),
     entryDate: z.string().datetime({ message: 'Entry date must be a valid ISO date' }),
-    inventoryItems: z.array(z.object({
-        itemId: z.string().uuid('Invalid inventory item ID'),
-        quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
-        unitCost: decimalString.optional(),   // For EXPENSE entries: acquisition cost. For INCOME entries: ignored for COGS.
-        sellingPrice: decimalString.optional(), // For INCOME entries: revenue per unit (stored for gross-margin reporting).
-    })).optional(),
+    inventoryItems: z
+        .array(
+            z.object({
+                itemId: z.string().uuid('Invalid inventory item ID'),
+                quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+                unitCost: decimalString.optional(), // For EXPENSE entries: acquisition cost. For INCOME entries: ignored for COGS.
+                sellingPrice: decimalString.optional(), // For INCOME entries: revenue per unit (stored for gross-margin reporting).
+            }),
+        )
+        .optional(),
 });
 
 export const updateEntrySchema = z.object({
@@ -62,12 +68,16 @@ export const updateEntrySchema = z.object({
     entryDate: z.string().datetime().optional(),
     /** Optimistic concurrency: reject if entry.version does not match. */
     expectedVersion: z.coerce.number().int().positive().optional(),
-    inventoryItems: z.array(z.object({
-        itemId: z.string().uuid('Invalid inventory item ID'),
-        quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
-        unitCost: decimalString.optional(),   // For EXPENSE entries: acquisition cost. For INCOME entries: ignored for COGS.
-        sellingPrice: decimalString.optional(), // For INCOME entries: revenue per unit (stored for gross-margin reporting).
-    })).optional(),
+    inventoryItems: z
+        .array(
+            z.object({
+                itemId: z.string().uuid('Invalid inventory item ID'),
+                quantity: z.coerce.number().int().min(1, 'Quantity must be at least 1'),
+                unitCost: decimalString.optional(), // For EXPENSE entries: acquisition cost. For INCOME entries: ignored for COGS.
+                sellingPrice: decimalString.optional(), // For INCOME entries: revenue per unit (stored for gross-margin reporting).
+            }),
+        )
+        .optional(),
 });
 
 export const deleteEntrySchema = z.object({
@@ -91,29 +101,36 @@ const queryBoolean = z
     .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
     .transform((value) => value === true || value === 'true' || value === '1');
 
-export const entryQuerySchema = z.object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    type: z.enum(['INCOME', 'EXPENSE']).optional(),
-    categoryId: z.string().uuid().optional(),
-    contactId: z.string().uuid().optional(),
-    paymentModeId: z.string().uuid().optional(),
-    /** Only entries this person posted. */
-    memberId: z.string().uuid().optional(),
-    /** Only entries through this wallet — or `none` for book cash, no wallet. */
-    accountId: z.union([z.string().uuid(), z.literal('none')]).optional(),
-    /** Description, contact, category, payment mode, or an exact amount. */
-    search: z.string().trim().max(100).optional().transform((value) => value || undefined),
-    startDate: z.string().datetime().optional(),
-    endDate: z.string().datetime().optional(),
-    sortBy: z.enum(['entryDate', 'amount', 'createdAt']).default('entryDate'),
-    sortOrder: z.enum(['asc', 'desc']).default('desc'),
-    /** Show reversed entries alongside live ones. Default false. */
-    includeReversed: queryBoolean.default(false),
-}).refine(
-    (q) => !q.startDate || !q.endDate || new Date(q.startDate) <= new Date(q.endDate),
-    { message: 'The start date must be on or before the end date', path: ['endDate'] },
-);
+export const entryQuerySchema = z
+    .object({
+        page: z.coerce.number().int().min(1).default(1),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        type: z.enum(['INCOME', 'EXPENSE']).optional(),
+        categoryId: z.string().uuid().optional(),
+        contactId: z.string().uuid().optional(),
+        paymentModeId: z.string().uuid().optional(),
+        /** Only entries this person posted. */
+        memberId: z.string().uuid().optional(),
+        /** Only entries through this wallet — or `none` for book cash, no wallet. */
+        accountId: z.union([z.string().uuid(), z.literal('none')]).optional(),
+        /** Description, contact, category, payment mode, or an exact amount. */
+        search: z
+            .string()
+            .trim()
+            .max(100)
+            .optional()
+            .transform((value) => value || undefined),
+        startDate: z.string().datetime().optional(),
+        endDate: z.string().datetime().optional(),
+        sortBy: z.enum(['entryDate', 'amount', 'createdAt']).default('entryDate'),
+        sortOrder: z.enum(['asc', 'desc']).default('desc'),
+        /** Show reversed entries alongside live ones. Default false. */
+        includeReversed: queryBoolean.default(false),
+    })
+    .refine((q) => !q.startDate || !q.endDate || new Date(q.startDate) <= new Date(q.endDate), {
+        message: 'The start date must be on or before the end date',
+        path: ['endDate'],
+    });
 
 // Integration-only provenance is intentionally not part of the public UI
 // schema. Manual create requests still pass createEntrySchema, while trusted
@@ -143,3 +160,10 @@ export const reassignEntrySchema = z.object({
 });
 
 export type ReassignEntryDto = z.infer<typeof reassignEntrySchema>;
+
+export const sendReceiptSchema = z
+    .object({
+        expectedVersion: z.number().int().positive().optional(),
+        email: z.string().email().optional(),
+    })
+    .strict();

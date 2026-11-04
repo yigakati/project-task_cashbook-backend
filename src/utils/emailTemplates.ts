@@ -316,8 +316,9 @@ export function receiptEmailTemplate(params: {
     currency: string;
     amountPaid: string;
     paymentDate: string;
-    remainingBal: string;
+    remainingBal: string | null;
     logoUrl?: string | null;
+    businessDetails?: string[];
 }): string {
     const {
         customerName,
@@ -328,11 +329,17 @@ export function receiptEmailTemplate(params: {
         amountPaid,
         paymentDate,
         remainingBal,
-        logoUrl
-    } = params;
-    
+        logoUrl,
+    } = Object.fromEntries(
+        Object.entries(params).map(([key, value]) => [
+            key,
+            typeof value === 'string' ? escapeHtml(value) : value,
+        ]),
+    ) as typeof params;
+
     // Use fallback logo if none provided
-    const _logoUrl = logoUrl || 'https://inchange.odixtec.com/reportlogo.svg';
+    const _logoUrl = logoUrl || 'https://inchange.odixtec.com/logo.png';
+    const issuerDetails = (params.businessDetails ?? []).map(escapeHtml).join('<br>');
 
     return `<!DOCTYPE html>
     <html>
@@ -347,7 +354,7 @@ export function receiptEmailTemplate(params: {
         <tr><td align="center">
 
         <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; width: 100%; border-radius: 12px; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-            
+
             <!-- Header Band (Dark) -->
             <tr>
                 <td style="background-color: #111827; padding: 32px 40px; text-align: center;">
@@ -371,6 +378,8 @@ export function receiptEmailTemplate(params: {
                         Thank you for your business. We have successfully received a payment of <strong>${currency} ${amountPaid}</strong> from you on <strong>${paymentDate}</strong>.
                     </p>
 
+                    <p style="font-size: 14px; color: #475569; line-height: 1.6;"><strong>${businessName}</strong><br>${issuerDetails}</p>
+
                     <!-- Amount Box -->
                     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 32px;">
                         <tr>
@@ -391,14 +400,14 @@ export function receiptEmailTemplate(params: {
                                             ${currency} ${amountPaid}
                                         </td>
                                     </tr>
-                                    <tr>
+                                    ${remainingBal === null ? '' : `<tr>
                                         <td style="padding: 12px 0; text-align: left; color: #64748b; font-size: 15px;">
                                             Remaining Balance
                                         </td>
                                         <td style="padding: 12px 0; text-align: right; color: #0f172a; font-size: 15px; font-weight: 600;">
                                             ${currency} ${remainingBal}
                                         </td>
-                                    </tr>
+                                    </tr>`}
                                 </table>
                             </td>
                         </tr>

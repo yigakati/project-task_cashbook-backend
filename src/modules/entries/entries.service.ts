@@ -1,5 +1,11 @@
 import { injectable, inject } from 'tsyringe';
-import { Prisma, PrismaClient, TransactionSourceType, InventoryReferenceType, EntryStatus } from '@prisma/client';
+import {
+    Prisma,
+    PrismaClient,
+    TransactionSourceType,
+    InventoryReferenceType,
+    EntryStatus,
+} from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { EntriesRepository } from './entries.repository';
 import { syncSharedEntry } from '../shared-entries/shared-entries.lifecycle';
@@ -10,11 +16,7 @@ import {
     ConflictError,
     AuthorizationError,
 } from '../../core/errors/AppError';
-import {
-    AuditAction,
-    CashbookRole,
-    EntryType,
-} from '../../core/types';
+import { AuditAction, CashbookRole, EntryType } from '../../core/types';
 import {
     CreateEntryDto,
     UpdateEntryDto,
@@ -23,14 +25,15 @@ import {
     EntryQueryDto,
 } from './entries.dto';
 import { logger } from '../../utils/logger';
+import { z } from 'zod';
 import { isDateInPast } from '../../utils/helpers';
 import { CashbookPermission, hasPermission } from '../../core/types/permissions';
 import { ObligationStatus, ObligationType } from '@prisma/client';
 import { InventoryService } from '../inventory/inventory.service';
-import { generateReceiptPdf } from './receipt.generator';
+import { generateReceiptPdf, formatReceiptMoney } from './receipt.generator';
 import { invoiceLogoUrl } from '../invoicing/invoice-logo';
 import { receiptEmailTemplate } from '../../utils/emailTemplates';
-import { sendEmail } from '../../config/email';
+import { sendEmail, isEmailConfigured } from '../../config/email';
 import {
     effectiveCashAmount,
     obligationStatusFromAmounts,
@@ -60,49 +63,55 @@ export class EntriesService {
         @inject('PrismaClient') private prisma: PrismaClient,
         private inventoryService: InventoryService,
         private postingService: PostingService,
-    ) { }
+    ) {}
 
     // ─── List Entries ──────────────────────────────────
     async getEntries(cashbookId: string, query: EntryQueryDto) {
-        const { entries, total, totals } = await this.entriesRepository.findByCashbookId(cashbookId, {
-            page: query.page,
-            limit: query.limit,
-            type: query.type,
-            categoryId: query.categoryId,
-            contactId: query.contactId,
-            paymentModeId: query.paymentModeId,
-            memberId: query.memberId,
-            accountId: query.accountId,
-            search: query.search,
-            startDate: query.startDate,
-            endDate: query.endDate,
-            sortBy: query.sortBy,
-            sortOrder: query.sortOrder,
-            includeReversed: query.includeReversed,
-        });
+        const { entries, total, totals } = await this.entriesRepository.findByCashbookId(
+            cashbookId,
+            {
+                page: query.page,
+                limit: query.limit,
+                type: query.type,
+                categoryId: query.categoryId,
+                contactId: query.contactId,
+                paymentModeId: query.paymentModeId,
+                memberId: query.memberId,
+                accountId: query.accountId,
+                search: query.search,
+                startDate: query.startDate,
+                endDate: query.endDate,
+                sortBy: query.sortBy,
+                sortOrder: query.sortOrder,
+                includeReversed: query.includeReversed,
+            },
+        );
 
         const runningBalances = await this.runningBalances(cashbookId, entries, query);
 
         const totalPages = Math.ceil(total / query.limit);
 
-        const entryIds = entries.map(e => e.id);
-        const inventoryTransactions = entryIds.length > 0 ? await this.prisma.inventoryTransaction.findMany({
-            where: {
-                referenceType: InventoryReferenceType.ENTRY,
-                referenceId: { in: entryIds }
-            },
-            include: {
-                item: { select: { id: true, name: true, sku: true, unit: true } }
-            }
-        }) : [];
+        const entryIds = entries.map((e) => e.id);
+        const inventoryTransactions =
+            entryIds.length > 0
+                ? await this.prisma.inventoryTransaction.findMany({
+                      where: {
+                          referenceType: InventoryReferenceType.ENTRY,
+                          referenceId: { in: entryIds },
+                      },
+                      include: {
+                          item: { select: { id: true, name: true, sku: true, unit: true } },
+                      },
+                  })
+                : [];
 
         const invMap = new Map();
-        inventoryTransactions.forEach(it => {
+        inventoryTransactions.forEach((it) => {
             if (!invMap.has(it.referenceId)) invMap.set(it.referenceId, []);
             invMap.get(it.referenceId).push(it);
         });
 
-        const mappedEntries = entries.map(entry => {
+        const mappedEntries = entries.map((entry) => {
             const { accountTransactions, ...rest } = entry as any;
             return {
                 ...rest,
@@ -201,13 +210,25 @@ export class EntriesService {
         }>,
         query: EntryQueryDto,
     ): Promise<{ balances: Map<string, string> | null; reason: string | null }> {
-        const subset = query.type || query.memberId || query.accountId || query.search
-            || query.categoryId || query.contactId || query.paymentModeId;
+        const subset =
+            query.type ||
+            query.memberId ||
+            query.accountId ||
+            query.search ||
+            query.categoryId ||
+            query.contactId ||
+            query.paymentModeId;
         if (subset) {
-            return { balances: null, reason: 'A running balance is not shown while entries are filtered to a subset.' };
+            return {
+                balances: null,
+                reason: 'A running balance is not shown while entries are filtered to a subset.',
+            };
         }
         if (query.sortBy !== 'entryDate') {
-            return { balances: null, reason: 'A running balance is only shown when entries are in date order.' };
+            return {
+                balances: null,
+                reason: 'A running balance is only shown when entries are in date order.',
+            };
         }
         if (entries.length === 0) return { balances: new Map(), reason: null };
 
@@ -238,12 +259,14 @@ export class EntriesService {
         const balances = new Map<string, string>();
         for (const entry of chronological) {
             if (entry.status === EntryStatus.POSTED) {
-                balance = balance.add(cashbookBalanceDelta(
-                    entry.type,
-                    entry.amount,
-                    entry.chargeAmount,
-                    entry.accountTransactions.length > 0,
-                ));
+                balance = balance.add(
+                    cashbookBalanceDelta(
+                        entry.type,
+                        entry.amount,
+                        entry.chargeAmount,
+                        entry.accountTransactions.length > 0,
+                    ),
+                );
             }
             balances.set(entry.id, balance.toString());
         }
@@ -281,21 +304,31 @@ export class EntriesService {
                 where: { voidedAt: null, sourceEntry: { is: live } },
                 _count: { _all: true },
             }),
-            this.prisma.entry.count({ where: { ...live, accountTransactions: { none: { voidedAt: null } } } }),
-            this.prisma.cashbookMember.findMany({ where: { cashbookId }, select: { userId: true, role: true } }),
+            this.prisma.entry.count({
+                where: { ...live, accountTransactions: { none: { voidedAt: null } } },
+            }),
+            this.prisma.cashbookMember.findMany({
+                where: { cashbookId },
+                select: { userId: true, role: true },
+            }),
             isPersonal
                 ? Promise.resolve([] as Array<{ userId: string; role: string }>)
                 : this.prisma.workspaceMember.findMany({
-                    where: { workspaceId: cashbook.workspaceId },
-                    select: { userId: true, role: true },
-                }),
+                      where: { workspaceId: cashbook.workspaceId },
+                      select: { userId: true, role: true },
+                  }),
         ]);
 
         // Who can reach the book, and through which role.
         const access = new Map<string, string>();
         access.set(cashbook.workspace.ownerId, 'OWNER');
         for (const member of orgMembers) {
-            if (hasWorkspacePermission(member.role as never, WorkspacePermission.ACCESS_ALL_CASHBOOKS)) {
+            if (
+                hasWorkspacePermission(
+                    member.role as never,
+                    WorkspacePermission.ACCESS_ALL_CASHBOOKS,
+                )
+            ) {
                 access.set(member.userId, member.role);
             }
         }
@@ -303,10 +336,7 @@ export class EntriesService {
         for (const member of bookMembers) access.set(member.userId, member.role);
 
         const counts = new Map(byPoster.map((row) => [row.createdById, row._count._all]));
-        const userIds = [...new Set([
-            ...counts.keys(),
-            ...(includeRoster ? access.keys() : []),
-        ])];
+        const userIds = [...new Set([...counts.keys(), ...(includeRoster ? access.keys() : [])])];
 
         const [users, accounts] = await Promise.all([
             this.prisma.user.findMany({
@@ -349,19 +379,19 @@ export class EntriesService {
     }
 
     // ─── Get Single Entry ─────────────────────────────
-    async getEntry(entryId: string) {
+    async getEntry(entryId: string, cashbookId: string) {
         const entry = await this.entriesRepository.findById(entryId);
-        if (!entry || entry.isDeleted) {
-            throw new NotFoundError('Entry');
+        if (!entry || entry.isDeleted || entry.cashbookId !== cashbookId) {
+            throw new NotFoundError('Entry in this cashbook');
         }
         const inventoryTransactions = await this.prisma.inventoryTransaction.findMany({
             where: {
                 referenceType: InventoryReferenceType.ENTRY,
-                referenceId: entryId
+                referenceId: entryId,
             },
             include: {
-                item: { select: { id: true, name: true, sku: true, unit: true } }
-            }
+                item: { select: { id: true, name: true, sku: true, unit: true } },
+            },
         });
 
         const { accountTransactions, ...rest } = entry as any;
@@ -377,28 +407,54 @@ export class EntriesService {
         const entry = await this.prisma.entry.findFirst({
             where: { id: entryId, cashbookId },
             select: {
-                sharedEntries: { select: { id: true, status: true, createdAt: true, respondedAt: true } },
-                receivedSharedEntry: { select: {
-                    id: true, senderName: true, amount: true, type: true, entryDate: true, description: true,
-                    sourceContactId: true,
-                    sourceEntry: { select: { status: true, amount: true, type: true, entryDate: true, description: true, contactId: true } },
-                } },
+                sharedEntries: {
+                    select: { id: true, status: true, createdAt: true, respondedAt: true },
+                },
+                receivedSharedEntry: {
+                    select: {
+                        id: true,
+                        senderName: true,
+                        amount: true,
+                        type: true,
+                        entryDate: true,
+                        description: true,
+                        sourceContactId: true,
+                        sourceEntry: {
+                            select: {
+                                status: true,
+                                amount: true,
+                                type: true,
+                                entryDate: true,
+                                description: true,
+                                contactId: true,
+                            },
+                        },
+                    },
+                },
             },
         });
         if (!entry) throw new NotFoundError('Entry');
         const received = entry.receivedSharedEntry;
         return {
             deliveries: entry.sharedEntries,
-            received: received ? {
-                id: received.id, senderName: received.senderName,
-                sourceState: !received.sourceEntry ? 'UNAVAILABLE'
-                    : received.sourceEntry.status === 'REVERSED' ? 'REVERSED'
-                    : !received.sourceEntry.amount.equals(received.amount)
-                        || received.sourceEntry.type === received.type
-                        || received.sourceEntry.contactId !== received.sourceContactId
-                        || received.sourceEntry.description !== received.description
-                        || received.sourceEntry.entryDate.getTime() !== received.entryDate.getTime() ? 'CHANGED' : 'UNCHANGED',
-            } : null,
+            received: received
+                ? {
+                      id: received.id,
+                      senderName: received.senderName,
+                      sourceState: !received.sourceEntry
+                          ? 'UNAVAILABLE'
+                          : received.sourceEntry.status === 'REVERSED'
+                            ? 'REVERSED'
+                            : !received.sourceEntry.amount.equals(received.amount) ||
+                                received.sourceEntry.type === received.type ||
+                                received.sourceEntry.contactId !== received.sourceContactId ||
+                                received.sourceEntry.description !== received.description ||
+                                received.sourceEntry.entryDate.getTime() !==
+                                    received.entryDate.getTime()
+                              ? 'CHANGED'
+                              : 'UNCHANGED',
+                  }
+                : null,
         };
     }
 
@@ -417,15 +473,6 @@ export class EntriesService {
             await syncSharedEntry(tx, created.id);
             return created;
         });
-
-        // Background Hook: Send Automatic Receipt if paying an Obligation.
-        // Deliberately outside the transaction, and deliberately not awaited:
-        // the entry is already committed, and an SMTP failure must not undo it.
-        if (dto.obligationId && dto.type === EntryType.INCOME) {
-            this.sendReceipt(entry.id, userId).catch(err => {
-                logger.error(`Failed to send background receipt for entry ${entry.id}:`, err);
-            });
-        }
 
         return entry;
     }
@@ -470,7 +517,7 @@ export class EntriesService {
             throw new AppError(
                 'Backdated entries are not allowed for this cashbook',
                 400,
-                'BACKDATE_NOT_ALLOWED'
+                'BACKDATE_NOT_ALLOWED',
             );
         }
 
@@ -479,7 +526,7 @@ export class EntriesService {
         // Account Logic - Pre-validation
         if (dto.accountId) {
             const account = await tx.account.findUnique({
-                where: { id: dto.accountId }
+                where: { id: dto.accountId },
             });
 
             if (!account || account.workspaceId !== cashbook.workspaceId) {
@@ -487,7 +534,11 @@ export class EntriesService {
             }
 
             if (account.archivedAt) {
-                throw new AppError('Cannot create entries for an archived account', 400, 'ACCOUNT_ARCHIVED');
+                throw new AppError(
+                    'Cannot create entries for an archived account',
+                    400,
+                    'ACCOUNT_ARCHIVED',
+                );
             }
 
             // Currency mismatch check (Issue 4)
@@ -495,7 +546,7 @@ export class EntriesService {
                 throw new AppError(
                     `Account currency (${account.currency}) does not match cashbook currency (${cashbook.currency})`,
                     400,
-                    'CURRENCY_MISMATCH'
+                    'CURRENCY_MISMATCH',
                 );
             }
         }
@@ -507,7 +558,7 @@ export class EntriesService {
         // Obligation Pre-validation requirements
         if (dto.obligationId) {
             const obligation = await tx.cashbookObligation.findUnique({
-                where: { id: dto.obligationId }
+                where: { id: dto.obligationId },
             });
 
             if (!obligation) {
@@ -519,28 +570,58 @@ export class EntriesService {
                 type: obligation.type as 'RECEIVABLE' | 'PAYABLE',
             };
 
-            if (obligation.cashbookId !== cashbookId || obligation.workspaceId !== cashbook.workspaceId) {
-                throw new AppError('Obligation does not belong to this cashbook', 400, 'INVALID_OBLIGATION');
+            if (
+                obligation.cashbookId !== cashbookId ||
+                obligation.workspaceId !== cashbook.workspaceId
+            ) {
+                throw new AppError(
+                    'Obligation does not belong to this cashbook',
+                    400,
+                    'INVALID_OBLIGATION',
+                );
             }
 
             if (obligation.archivedAt) {
-                throw new AppError('Cannot apply payment to an archived obligation', 400, 'OBLIGATION_ARCHIVED');
+                throw new AppError(
+                    'Cannot apply payment to an archived obligation',
+                    400,
+                    'OBLIGATION_ARCHIVED',
+                );
             }
 
-            if (obligation.status === ObligationStatus.PAID || obligation.status === ObligationStatus.CANCELLED) {
-                throw new AppError(`Cannot apply payment to an obligation that is ${obligation.status.toLowerCase()}`, 400, 'INVALID_OBLIGATION_STATUS');
+            if (
+                obligation.status === ObligationStatus.PAID ||
+                obligation.status === ObligationStatus.CANCELLED
+            ) {
+                throw new AppError(
+                    `Cannot apply payment to an obligation that is ${obligation.status.toLowerCase()}`,
+                    400,
+                    'INVALID_OBLIGATION_STATUS',
+                );
             }
 
             if (obligation.type === ObligationType.RECEIVABLE && dto.type !== EntryType.INCOME) {
-                throw new AppError('Receivables must be settled with INCOME entries', 400, 'DIRECTION_MISMATCH');
+                throw new AppError(
+                    'Receivables must be settled with INCOME entries',
+                    400,
+                    'DIRECTION_MISMATCH',
+                );
             }
 
             if (obligation.type === ObligationType.PAYABLE && dto.type !== EntryType.EXPENSE) {
-                throw new AppError('Payables must be settled with EXPENSE entries', 400, 'DIRECTION_MISMATCH');
+                throw new AppError(
+                    'Payables must be settled with EXPENSE entries',
+                    400,
+                    'DIRECTION_MISMATCH',
+                );
             }
 
             if (amount.greaterThan(obligation.outstandingAmount)) {
-                throw new AppError(`Payment amount ${amount.toString()} exceeds outstanding balance of ${obligation.outstandingAmount.toString()}`, 400, 'OVERPAYMENT');
+                throw new AppError(
+                    `Payment amount ${amount.toString()} exceeds outstanding balance of ${obligation.outstandingAmount.toString()}`,
+                    400,
+                    'OVERPAYMENT',
+                );
             }
         }
 
@@ -599,7 +680,7 @@ export class EntriesService {
         if (dto.accountId) {
             // Already locked by acquireLocks above.
             const lockedAccount = await tx.account.findUniqueOrThrow({
-                where: { id: dto.accountId }
+                where: { id: dto.accountId },
             });
 
             // Overdraft is a business rule, not a bookkeeping one, so it is
@@ -609,7 +690,11 @@ export class EntriesService {
             if (!lockedAccount.allowNegative && walletDelta.lessThan(0)) {
                 const newAccountBalance = lockedAccount.balance.add(walletDelta);
                 if (newAccountBalance.lessThan(0)) {
-                    throw new AppError(`Transaction exceeds account balance. Current balance is ${lockedAccount.balance.toString()}`, 400, 'INSUFFICIENT_FUNDS');
+                    throw new AppError(
+                        `Transaction exceeds account balance. Current balance is ${lockedAccount.balance.toString()}`,
+                        400,
+                        'INSUFFICIENT_FUNDS',
+                    );
                 }
             }
 
@@ -648,11 +733,15 @@ export class EntriesService {
 
             // Already locked by acquireLocks above.
             const lockedObligation = await tx.cashbookObligation.findUniqueOrThrow({
-                where: { id: dto.obligationId }
+                where: { id: dto.obligationId },
             });
 
             if (amount.greaterThan(lockedObligation.outstandingAmount)) {
-                throw new AppError(`Concurrent payment exceeded outstanding balance`, 400, 'OVERPAYMENT');
+                throw new AppError(
+                    `Concurrent payment exceeded outstanding balance`,
+                    400,
+                    'OVERPAYMENT',
+                );
             }
 
             const newOutstanding = lockedObligation.outstandingAmount.sub(amount);
@@ -666,8 +755,8 @@ export class EntriesService {
                 where: { id: dto.obligationId },
                 data: {
                     outstandingAmount: newOutstanding,
-                    status: newStatus
-                }
+                    status: newStatus,
+                },
             });
 
             await tx.auditLog.create({
@@ -683,9 +772,9 @@ export class EntriesService {
                         previousOutstanding: lockedObligation.outstandingAmount,
                         newOutstanding,
                         statusBefore: lockedObligation.status,
-                        statusAfter: newStatus
-                    } as any
-                }
+                        statusAfter: newStatus,
+                    } as any,
+                },
             });
 
             const { InvoicingService } = await import('../invoicing/invoicing.service');
@@ -791,9 +880,17 @@ export class EntriesService {
 
         // Rent allocations are immutable receipts. Correct the original through
         // reversal + a replacement payment so period balances and shares agree.
-        if (await this.prisma.rentPayment.findUnique({ where: { entryId } }) &&
-            ['type', 'amount', 'contactId', 'obligationId', 'inventoryItems'].some(key => key in dto)) {
-            throw new AppError('Reverse this rent receipt and record a corrected payment from the tenancy', 409, 'RENT_RECEIPT_IMMUTABLE');
+        if (
+            (await this.prisma.rentPayment.findUnique({ where: { entryId } })) &&
+            ['type', 'amount', 'contactId', 'obligationId', 'inventoryItems'].some(
+                (key) => key in dto,
+            )
+        ) {
+            throw new AppError(
+                'Reverse this rent receipt and record a corrected payment from the tenancy',
+                409,
+                'RENT_RECEIPT_IMMUTABLE',
+            );
         }
 
         // Soft immutability: reconciled entries cannot change money-affecting fields
@@ -848,7 +945,7 @@ export class EntriesService {
                 throw new AppError(
                     'Backdated entries are not allowed for this cashbook',
                     400,
-                    'BACKDATE_NOT_ALLOWED'
+                    'BACKDATE_NOT_ALLOWED',
                 );
             }
         }
@@ -883,10 +980,16 @@ export class EntriesService {
             newValues.amount = dto.amount;
             changes.amount = { from: entry.amount.toString(), to: dto.amount };
         }
-        if (dto.chargeAmount !== undefined && dto.chargeAmount !== (entry.chargeAmount?.toString() || null)) {
+        if (
+            dto.chargeAmount !== undefined &&
+            dto.chargeAmount !== (entry.chargeAmount?.toString() || null)
+        ) {
             oldValues.chargeAmount = entry.chargeAmount?.toString() || null;
             newValues.chargeAmount = dto.chargeAmount;
-            changes.chargeAmount = { from: entry.chargeAmount?.toString() || null, to: dto.chargeAmount };
+            changes.chargeAmount = {
+                from: entry.chargeAmount?.toString() || null,
+                to: dto.chargeAmount,
+            };
         }
         if (dto.description && dto.description !== entry.description) {
             oldValues.description = entry.description;
@@ -961,7 +1064,8 @@ export class EntriesService {
             const hasAccountChanged =
                 dto.accountId !== undefined && dto.accountId !== (existingTx?.accountId || null);
 
-            const targetAccountId = dto.accountId !== undefined ? dto.accountId : existingTx?.accountId || null;
+            const targetAccountId =
+                dto.accountId !== undefined ? dto.accountId : existingTx?.accountId || null;
 
             const wasIncome = entry.type === EntryType.INCOME;
             const oldAmount = entry.amount;
@@ -975,9 +1079,12 @@ export class EntriesService {
             const newType = dto.type || entry.type;
             const newAmount = dto.amount ? new Decimal(dto.amount) : entry.amount;
             const isIncome = newType === EntryType.INCOME;
-            const newChargeAmount = dto.chargeAmount !== undefined
-                ? (dto.chargeAmount ? new Decimal(dto.chargeAmount) : new Decimal(0))
-                : (entry.chargeAmount || new Decimal(0));
+            const newChargeAmount =
+                dto.chargeAmount !== undefined
+                    ? dto.chargeAmount
+                        ? new Decimal(dto.chargeAmount)
+                        : new Decimal(0)
+                    : entry.chargeAmount || new Decimal(0);
             const newEffectiveAmount = effectiveCashAmount(newType, newAmount, newChargeAmount);
             // Keeps the wallet statement's business date in step with the entry.
             const newEntryDate = dto.entryDate ? new Date(dto.entryDate) : entry.entryDate;
@@ -985,10 +1092,14 @@ export class EntriesService {
             // Cashbook balance audit: only unlinked entries move it
             let balanceAfter = balanceBefore;
             if (!existingTx) {
-                balanceAfter = balanceAfter.sub(walletBalanceDelta(entry.type, oldAmount, oldChargeAmount));
+                balanceAfter = balanceAfter.sub(
+                    walletBalanceDelta(entry.type, oldAmount, oldChargeAmount),
+                );
             }
             if (!targetAccountId) {
-                balanceAfter = balanceAfter.add(walletBalanceDelta(newType, newAmount, newChargeAmount));
+                balanceAfter = balanceAfter.add(
+                    walletBalanceDelta(newType, newAmount, newChargeAmount),
+                );
             }
 
             // Deal with Accounts
@@ -1001,27 +1112,42 @@ export class EntriesService {
 
                 if (targetAccountId) {
                     if (moneyChanged || !existingTx) {
-                        const targetAccount = await tx.account.findUniqueOrThrow({ where: { id: targetAccountId } });
+                        const targetAccount = await tx.account.findUniqueOrThrow({
+                            where: { id: targetAccountId },
+                        });
                         if (targetAccount.archivedAt) {
-                            throw new AppError('Cannot modify entries linked to an archived account', 400, 'ACCOUNT_ARCHIVED');
+                            throw new AppError(
+                                'Cannot modify entries linked to an archived account',
+                                400,
+                                'ACCOUNT_ARCHIVED',
+                            );
                         }
 
-                        if ((hasAccountChanged || !existingTx) && targetAccount.currency !== lockedCashbook.currency) {
+                        if (
+                            (hasAccountChanged || !existingTx) &&
+                            targetAccount.currency !== lockedCashbook.currency
+                        ) {
                             throw new AppError(
                                 `Account currency (${targetAccount.currency}) does not match cashbook currency (${lockedCashbook.currency})`,
                                 400,
-                                'CURRENCY_MISMATCH'
+                                'CURRENCY_MISMATCH',
                             );
                         }
 
                         // Already locked by acquireLocks above.
-                        const lockedTarget = await tx.account.findUniqueOrThrow({ where: { id: targetAccountId } });
+                        const lockedTarget = await tx.account.findUniqueOrThrow({
+                            where: { id: targetAccountId },
+                        });
 
                         // Overdraft remains a business rule checked here; the
                         // ledger itself would post a negative balance happily.
                         // Compare against the balance net of this entry's old
                         // effect, since the repost reverses it first.
-                        const newWalletDelta = walletBalanceDelta(newType, newAmount, newChargeAmount);
+                        const newWalletDelta = walletBalanceDelta(
+                            newType,
+                            newAmount,
+                            newChargeAmount,
+                        );
                         const oldWalletDelta =
                             existingTx && existingTx.accountId === targetAccountId
                                 ? walletBalanceDelta(entry.type, oldAmount, oldChargeAmount)
@@ -1032,7 +1158,11 @@ export class EntriesService {
                                 .sub(oldWalletDelta)
                                 .add(newWalletDelta);
                             if (provisional.lessThan(0)) {
-                                throw new AppError(`Transaction exceeds account balance.`, 400, 'INSUFFICIENT_FUNDS');
+                                throw new AppError(
+                                    `Transaction exceeds account balance.`,
+                                    400,
+                                    'INSUFFICIENT_FUNDS',
+                                );
                             }
                         }
                     }
@@ -1043,11 +1173,13 @@ export class EntriesService {
                             data: {
                                 ...(hasAccountChanged && { accountId: targetAccountId as string }),
                                 amount: newAmount,
-                                chargeAmount: newChargeAmount.greaterThan(0) ? newChargeAmount : null,
+                                chargeAmount: newChargeAmount.greaterThan(0)
+                                    ? newChargeAmount
+                                    : null,
                                 type: newType as any,
                                 description: dto.description || existingTx.description,
                                 transactionDate: newEntryDate,
-                            }
+                            },
                         });
                     } else if (!existingTx) {
                         await this.upsertCashbookAccountTransaction(tx, {
@@ -1073,12 +1205,15 @@ export class EntriesService {
             // Deal with Obligations (independent of account logic)
             if (entry.obligationId || dto.obligationId) {
                 const { InvoicingService } = await import('../invoicing/invoicing.service');
-                const targetObligId = dto.obligationId !== undefined ? dto.obligationId : entry.obligationId;
+                const targetObligId =
+                    dto.obligationId !== undefined ? dto.obligationId : entry.obligationId;
 
                 // If moving away from an obligation, reverse it
                 if (entry.obligationId && dto.obligationId === null) {
                     // Already locked by acquireLocks above.
-                    const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId } });
+                    const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({
+                        where: { id: entry.obligationId },
+                    });
 
                     const newOutstanding = oldOblig.outstandingAmount.add(oldAmount);
                     const cappedOutstanding = newOutstanding.greaterThan(oldOblig.totalAmount)
@@ -1092,7 +1227,7 @@ export class EntriesService {
 
                     await tx.cashbookObligation.update({
                         where: { id: entry.obligationId },
-                        data: { outstandingAmount: cappedOutstanding, status: newStatus }
+                        data: { outstandingAmount: cappedOutstanding, status: newStatus },
                     });
 
                     await InvoicingService.syncInvoiceFromObligation(tx, {
@@ -1102,30 +1237,49 @@ export class EntriesService {
                     });
                 } else if (targetObligId) {
                     // Already locked by acquireLocks above.
-                    const lockedTarget = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: targetObligId } });
+                    const lockedTarget = await tx.cashbookObligation.findUniqueOrThrow({
+                        where: { id: targetObligId },
+                    });
 
-                    const changedObligation = entry.obligationId && entry.obligationId !== targetObligId;
+                    const changedObligation =
+                        entry.obligationId && entry.obligationId !== targetObligId;
                     const isNewAssignment = !entry.obligationId || changedObligation;
 
                     if (isNewAssignment) {
                         if (lockedTarget.cashbookId !== entry.cashbookId) {
-                            throw new AppError('Obligation does not belong to this cashbook', 400, 'INVALID_OBLIGATION');
+                            throw new AppError(
+                                'Obligation does not belong to this cashbook',
+                                400,
+                                'INVALID_OBLIGATION',
+                            );
                         }
 
                         if (lockedTarget.archivedAt) {
-                            throw new AppError('Cannot apply payment to an archived obligation', 400, 'OBLIGATION_ARCHIVED');
+                            throw new AppError(
+                                'Cannot apply payment to an archived obligation',
+                                400,
+                                'OBLIGATION_ARCHIVED',
+                            );
                         }
 
                         if (lockedTarget.status === ObligationStatus.CANCELLED) {
-                            throw new AppError('Cannot apply payment to a cancelled obligation', 400, 'INVALID_OBLIGATION_STATUS');
+                            throw new AppError(
+                                'Cannot apply payment to a cancelled obligation',
+                                400,
+                                'INVALID_OBLIGATION_STATUS',
+                            );
                         }
                     }
 
                     if (changedObligation) {
                         // Already locked by acquireLocks above.
-                        const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId as string } });
+                        const oldOblig = await tx.cashbookObligation.findUniqueOrThrow({
+                            where: { id: entry.obligationId as string },
+                        });
                         const revOutstanding = oldOblig.outstandingAmount.add(oldAmount);
-                        const cappedRevOutstanding = revOutstanding.greaterThan(oldOblig.totalAmount)
+                        const cappedRevOutstanding = revOutstanding.greaterThan(
+                            oldOblig.totalAmount,
+                        )
                             ? oldOblig.totalAmount
                             : revOutstanding;
                         const revStatus = obligationStatusFromAmounts(
@@ -1136,7 +1290,7 @@ export class EntriesService {
 
                         await tx.cashbookObligation.update({
                             where: { id: entry.obligationId as string },
-                            data: { outstandingAmount: cappedRevOutstanding, status: revStatus }
+                            data: { outstandingAmount: cappedRevOutstanding, status: revStatus },
                         });
 
                         await InvoicingService.syncInvoiceFromObligation(tx, {
@@ -1147,19 +1301,40 @@ export class EntriesService {
                     }
 
                     // Same obligation: net change = oldAmount - newAmount; new obligation: subtract newAmount
-                    const adjustment = !changedObligation && entry.obligationId ? oldAmount.sub(newAmount) : newAmount.negated();
+                    const adjustment =
+                        !changedObligation && entry.obligationId
+                            ? oldAmount.sub(newAmount)
+                            : newAmount.negated();
 
                     const provisionalOutstanding = lockedTarget.outstandingAmount.add(adjustment);
 
                     if (provisionalOutstanding.lessThan(0)) {
-                        throw new AppError(`Update would overpay the obligation`, 400, 'OVERPAYMENT');
+                        throw new AppError(
+                            `Update would overpay the obligation`,
+                            400,
+                            'OVERPAYMENT',
+                        );
                     }
 
-                    if (lockedTarget.type === ObligationType.RECEIVABLE && newType !== EntryType.INCOME) {
-                        throw new AppError('Receivables must be settled with INCOME entries', 400, 'DIRECTION_MISMATCH');
+                    if (
+                        lockedTarget.type === ObligationType.RECEIVABLE &&
+                        newType !== EntryType.INCOME
+                    ) {
+                        throw new AppError(
+                            'Receivables must be settled with INCOME entries',
+                            400,
+                            'DIRECTION_MISMATCH',
+                        );
                     }
-                    if (lockedTarget.type === ObligationType.PAYABLE && newType !== EntryType.EXPENSE) {
-                        throw new AppError('Payables must be settled with EXPENSE entries', 400, 'DIRECTION_MISMATCH');
+                    if (
+                        lockedTarget.type === ObligationType.PAYABLE &&
+                        newType !== EntryType.EXPENSE
+                    ) {
+                        throw new AppError(
+                            'Payables must be settled with EXPENSE entries',
+                            400,
+                            'DIRECTION_MISMATCH',
+                        );
                     }
 
                     const newStatus = obligationStatusFromAmounts(
@@ -1172,8 +1347,8 @@ export class EntriesService {
                         where: { id: targetObligId },
                         data: {
                             outstandingAmount: provisionalOutstanding,
-                            status: newStatus
-                        }
+                            status: newStatus,
+                        },
                     });
 
                     await InvoicingService.syncInvoiceFromObligation(tx, {
@@ -1193,8 +1368,8 @@ export class EntriesService {
                                 entryId,
                                 adjustedAmount: adjustment,
                                 newOutstanding: provisionalOutstanding,
-                            } as any
-                        }
+                            } as any,
+                        },
                     });
                 }
             }
@@ -1205,11 +1380,15 @@ export class EntriesService {
                 data: {
                     ...(dto.type && { type: dto.type as any }),
                     ...(dto.amount && { amount: new Decimal(dto.amount) }),
-                    ...(dto.chargeAmount !== undefined ? { chargeAmount: dto.chargeAmount ? new Decimal(dto.chargeAmount) : null } : {}),
+                    ...(dto.chargeAmount !== undefined
+                        ? { chargeAmount: dto.chargeAmount ? new Decimal(dto.chargeAmount) : null }
+                        : {}),
                     ...(dto.description && { description: dto.description }),
                     ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
                     ...(dto.contactId !== undefined ? { contactId: dto.contactId } : {}),
-                    ...(dto.paymentModeId !== undefined ? { paymentModeId: dto.paymentModeId } : {}),
+                    ...(dto.paymentModeId !== undefined
+                        ? { paymentModeId: dto.paymentModeId }
+                        : {}),
                     ...(dto.obligationId !== undefined ? { obligationId: dto.obligationId } : {}),
                     ...(dto.entryDate && { entryDate: new Date(dto.entryDate) }),
                     // The version claim above already incremented when
@@ -1240,9 +1419,9 @@ export class EntriesService {
 
                 const targetObligation = updatedEntry.obligationId
                     ? await tx.cashbookObligation.findUnique({
-                        where: { id: updatedEntry.obligationId },
-                        select: { id: true, type: true },
-                    })
+                          where: { id: updatedEntry.obligationId },
+                          select: { id: true, type: true },
+                      })
                     : null;
 
                 await this.postingService.repost(tx, {
@@ -1267,9 +1446,9 @@ export class EntriesService {
                         contactId: updatedEntry.contactId,
                         obligation: targetObligation
                             ? {
-                                id: targetObligation.id,
-                                type: targetObligation.type as 'RECEIVABLE' | 'PAYABLE',
-                            }
+                                  id: targetObligation.id,
+                                  type: targetObligation.type as 'RECEIVABLE' | 'PAYABLE',
+                              }
                             : null,
                     }),
                 });
@@ -1340,12 +1519,7 @@ export class EntriesService {
     }
 
     // ─── Delete Entry (Owner / with permission) ────────
-    async deleteEntry(
-        entryId: string,
-        userId: string,
-        reason: string,
-        userRole: CashbookRole
-    ) {
+    async deleteEntry(entryId: string, userId: string, reason: string, userRole: CashbookRole) {
         const entry = await this.entriesRepository.findById(entryId);
         if (!entry || entry.isDeleted) {
             throw new NotFoundError('Entry');
@@ -1390,18 +1564,22 @@ export class EntriesService {
                 },
             });
 
-            return { action: 'REQUEST_CREATED', message: 'Delete request submitted for approval', data: request };
+            return {
+                action: 'REQUEST_CREATED',
+                message: 'Delete request submitted for approval',
+                data: request,
+            };
         }
 
-        throw new AppError('You do not have permission to delete entries', 403, 'AUTHORIZATION_ERROR');
+        throw new AppError(
+            'You do not have permission to delete entries',
+            403,
+            'AUTHORIZATION_ERROR',
+        );
     }
 
     // ─── Review Delete Request ─────────────────────────
-    async reviewDeleteRequest(
-        requestId: string,
-        reviewerId: string,
-        dto: ReviewDeleteRequestDto
-    ) {
+    async reviewDeleteRequest(requestId: string, reviewerId: string, dto: ReviewDeleteRequestDto) {
         const request = await this.entriesRepository.findDeleteRequestById(requestId);
         if (!request) {
             throw new NotFoundError('Delete request');
@@ -1421,9 +1599,10 @@ export class EntriesService {
             reviewNote: dto.reviewNote,
         });
 
-        const action = dto.status === 'APPROVED'
-            ? AuditAction.ENTRY_DELETE_APPROVED
-            : AuditAction.ENTRY_DELETE_REJECTED;
+        const action =
+            dto.status === 'APPROVED'
+                ? AuditAction.ENTRY_DELETE_APPROVED
+                : AuditAction.ENTRY_DELETE_REJECTED;
 
         const cashbook = request.entry?.cashbook;
 
@@ -1456,9 +1635,9 @@ export class EntriesService {
     }
 
     // ─── Get Entry Audit Trail ─────────────────────────
-    async getEntryAuditTrail(entryId: string) {
+    async getEntryAuditTrail(entryId: string, cashbookId: string) {
         const entry = await this.entriesRepository.findById(entryId);
-        if (!entry) {
+        if (!entry || entry.cashbookId !== cashbookId) {
             throw new NotFoundError('Entry');
         }
         return this.entriesRepository.getEntryAudits(entryId);
@@ -1467,7 +1646,8 @@ export class EntriesService {
     // ─── Internal: Perform Deletion ────────────────────
     private async performDeletion(entry: any, userId: string, reason: string) {
         await withFinancialTransaction(this.prisma, (tx) =>
-            this.reverseEntryWithin(tx, entry, userId, reason));
+            this.reverseEntryWithin(tx, entry, userId, reason),
+        );
     }
 
     /**
@@ -1543,7 +1723,7 @@ export class EntriesService {
                 sourceId: entry.id,
                 sourceType: TransactionSourceType.CASHBOOK_ENTRY,
                 voidedAt: null,
-            }
+            },
         });
 
         if ((existingTx?.accountId ?? null) !== (walletProbe?.accountId ?? null)) {
@@ -1573,8 +1753,8 @@ export class EntriesService {
                 if (lockedAccount.balance.add(reversalDelta).lessThan(0)) {
                     throw new AppError(
                         `Deleting this entry would overdraw account "${lockedAccount.name}" ` +
-                        `(balance ${lockedAccount.balance.toString()}, reversal ${reversalDelta.toString()}). ` +
-                        'Allow a negative balance on the account, or reverse the offsetting entries first.',
+                            `(balance ${lockedAccount.balance.toString()}, reversal ${reversalDelta.toString()}). ` +
+                            'Allow a negative balance on the account, or reverse the offsetting entries first.',
                         400,
                         'INSUFFICIENT_FUNDS',
                     );
@@ -1590,7 +1770,9 @@ export class EntriesService {
 
         if (entry.obligationId) {
             // Already locked by acquireLocks above.
-            const lockedObligation = await tx.cashbookObligation.findUniqueOrThrow({ where: { id: entry.obligationId } });
+            const lockedObligation = await tx.cashbookObligation.findUniqueOrThrow({
+                where: { id: entry.obligationId },
+            });
 
             const newOutstanding = lockedObligation.outstandingAmount.add(amount);
             const cappedOutstanding = newOutstanding.greaterThan(lockedObligation.totalAmount)
@@ -1606,8 +1788,8 @@ export class EntriesService {
                 where: { id: entry.obligationId },
                 data: {
                     outstandingAmount: cappedOutstanding,
-                    status: newStatus
-                }
+                    status: newStatus,
+                },
             });
 
             await tx.auditLog.create({
@@ -1621,9 +1803,9 @@ export class EntriesService {
                         entryId: entry.id,
                         reason,
                         reversedAmount: amount,
-                        newOutstanding: cappedOutstanding
-                    } as any
-                }
+                        newOutstanding: cappedOutstanding,
+                    } as any,
+                },
             });
 
             const { InvoicingService } = await import('../invoicing/invoicing.service');
@@ -1717,8 +1899,8 @@ export class EntriesService {
                     amount: entry.amount,
                     type: entry.type,
                     reason,
-                } as any
-            }
+                } as any,
+            },
         });
         // Financial audit log
         await tx.financialAuditLog.create({
@@ -1860,35 +2042,23 @@ export class EntriesService {
     }
 
     // ─── Receipts ──────────────────────────────────────
-    /**
-     * The receipt as data, for the client to render and print.
-     *
-     * The same model the PDF generator is handed, so a printed receipt and an
-     * emailed one show identical facts. Building the document twice from two
-     * queries is how the printed copy quietly starts disagreeing with the
-     * emailed one.
-     *
-     * Emailing still renders server-side, because the recipient never loads our
-     * page. Printing renders client-side, because the person printing already
-     * has the page open and a browser prints better than we do.
-     */
-    async getReceiptModel(entryId: string) {
-        const entry = await this.prisma.entry.findUnique({
-            where: { id: entryId },
+    /** One projection supplies both the printed receipt and its emailed PDF. */
+    private async receiptData(entryId: string, cashbookId: string) {
+        const entry = await this.prisma.entry.findFirst({
+            where: { id: entryId, cashbookId, isDeleted: false },
             include: {
-                cashbook: { select: { workspaceId: true, currency: true, name: true } },
+                cashbook: {
+                    include: { workspace: { include: { profile: true, invoiceSettings: true } } },
+                },
                 contact: { include: { customerProfile: true } },
                 paymentMode: true,
                 obligation: true,
             },
         });
-
-        if (!entry) throw new NotFoundError('Entry');
-        if (!entry.contact) {
-            throw new AppError(
-                'This entry is not linked to a customer, so there is nobody to receipt.',
-                400,
-                'NO_CONTACT',
+        if (!entry) throw new NotFoundError('Entry in this cashbook');
+        if (entry.status !== 'POSTED') {
+            throw new ConflictError(
+                'This entry was reversed and cannot be issued as a payment receipt',
             );
         }
         if (entry.type !== 'INCOME') {
@@ -1898,172 +2068,170 @@ export class EntriesService {
                 'NOT_INCOME',
             );
         }
-
-        const workspaceId = entry.cashbook.workspaceId;
-        const [workspace, settings] = await Promise.all([
-            this.prisma.workspace.findUnique({ where: { id: workspaceId } }),
-            this.prisma.invoiceSettings.findUnique({ where: { workspaceId } }),
-        ]);
-
-        return {
+        if (!entry.contact) {
+            throw new AppError(
+                'This entry is not linked to a customer, so there is nobody to receipt.',
+                400,
+                'NO_CONTACT',
+            );
+        }
+        const workspace = entry.cashbook.workspace;
+        const profile = workspace.profile;
+        const settings = workspace.invoiceSettings;
+        const email = entry.contact.email?.trim() || null;
+        const model = {
             receiptNumber: entry.id.split('-').pop() || entry.id,
-            paymentDate: entry.entryDate,
+            entryVersion: entry.version,
+            paymentDate: entry.entryDate.toISOString(),
+            timezone: workspace.timezone,
             amountPaid: entry.amount.toString(),
             currency: entry.cashbook.currency,
             paymentMode: entry.paymentMode ? { name: entry.paymentMode.name } : null,
             description: entry.description,
             obligation: entry.obligation
                 ? {
-                    title: entry.obligation.title,
-                    totalAmount: entry.obligation.totalAmount.toString(),
-                    outstandingAmount: entry.obligation.outstandingAmount.toString(),
-                }
+                      title: entry.obligation.title,
+                      totalAmount: entry.obligation.totalAmount.toString(),
+                      outstandingAmount: entry.obligation.outstandingAmount.toString(),
+                  }
                 : null,
             customer: {
                 name: entry.contact.name,
-                email: entry.contact.email,
+                email,
                 phone: entry.contact.phone,
                 company: entry.contact.company,
                 billingAddress: entry.contact.customerProfile?.billingAddress ?? null,
                 taxId: entry.contact.customerProfile?.taxId ?? null,
             },
-            // Only what InvoiceSettings actually models. Inventing address and
-            // phone fields here would print empty lines on every receipt.
             business: {
-                name: workspace?.name ?? 'Business',
-                logoUrl: invoiceLogoUrl(settings?.logoKey),
+                name: profile?.displayName?.trim() || workspace.name,
+                legalName: profile?.legalName ?? null,
+                address:
+                    [
+                        profile?.addressLine1,
+                        profile?.addressLine2,
+                        profile?.city,
+                        profile?.state,
+                        profile?.postalCode,
+                        profile?.country,
+                    ]
+                        .filter(Boolean)
+                        .join(', ') || null,
+                email: profile?.billingEmail || profile?.email || null,
+                phone: profile?.phone ?? null,
+                website: profile?.website ?? null,
+                taxId: profile?.taxId ?? null,
+                registrationNo: profile?.registrationNo ?? null,
+                logoUrl:
+                    invoiceLogoUrl(settings?.logoKey) || 'https://inchange.odixtec.com/logo.png',
                 accentColor: settings?.accentColor ?? null,
                 footer: settings?.defaultFooter ?? null,
                 notes: settings?.defaultNotes ?? null,
             },
-            /** False means the Send button should explain itself rather than fail. */
-            canEmail: Boolean(entry.contact.email),
+            canEmail: email !== null && z.string().email().safeParse(email).success,
         };
+        return { model, settings, workspaceId: workspace.id };
     }
 
-    async sendReceipt(entryId: string, userId: string) {
-        const entry = await this.prisma.entry.findUnique({
-            where: { id: entryId },
-            include: {
-                cashbook: { select: { workspaceId: true, currency: true } },
-                contact: { include: { customerProfile: true } },
-                paymentMode: true,
-                obligation: true,
-            }
-        });
+    async getReceiptModel(entryId: string, cashbookId: string) {
+        return (await this.receiptData(entryId, cashbookId)).model;
+    }
 
-        if (!entry) throw new NotFoundError('Entry');
-        // An obligation is NOT required. A receipt acknowledges that money was
-        // received; most sales are paid on the spot and never become a
-        // receivable. Requiring one meant the commonest case — a walk-in
-        // customer paying cash — could not be given a receipt at all.
-        if (!entry.contact) {
+    async sendReceipt(
+        entryId: string,
+        userId: string,
+        cashbookId: string,
+        review?: { expectedVersion?: number; email?: string },
+    ) {
+        const { model, settings, workspaceId } = await this.receiptData(entryId, cashbookId);
+        if (!model.canEmail || !model.customer.email) {
             throw new AppError(
-                'This entry is not linked to a customer, so there is nobody to receipt.',
-                400,
-                'NO_CONTACT',
-            );
-        }
-        if (!entry.contact.email) {
-            throw new AppError(
-                'That customer has no email address. Add one, or print the receipt instead.',
+                'That customer has no valid email address. Add one, or print the receipt instead.',
                 400,
                 'NO_EMAIL',
             );
         }
-        if (entry.type !== 'INCOME') {
-            throw new AppError(
-                'Receipts acknowledge money received. This entry is money out.',
-                400,
-                'NOT_INCOME',
+        if (
+            (review?.expectedVersion !== undefined &&
+                review.expectedVersion !== model.entryVersion) ||
+            (review?.email !== undefined && review.email !== model.customer.email)
+        ) {
+            throw new ConflictError(
+                'The entry or customer email changed. Refresh the receipt before sending',
             );
         }
-
-        const workspaceId = entry.cashbook.workspaceId;
-
-        // Fetch Business Data & Settings
-        const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
-        const settings = await this.prisma.invoiceSettings.findUnique({ where: { workspaceId } });
-
-        const businessName = workspace?.name || 'Business';
-
-        // Prepare PDF/Email Models
-        const pdfModel = {
-            receiptNumber: entry.id.split('-').pop() || entry.id,
-            paymentDate: entry.entryDate,
-            amountPaid: entry.amount,
-            currency: entry.cashbook.currency,
-            paymentMode: entry.paymentMode,
-            // Falls back to the entry itself when the payment does not settle a
-            // receivable: paid in full, nothing outstanding.
-            obligation: entry.obligation
-                ? {
-                    title: entry.obligation.title,
-                    totalAmount: entry.obligation.totalAmount,
-                    outstandingAmount: entry.obligation.outstandingAmount,
-                }
-                : {
-                    title: entry.description,
-                    totalAmount: entry.amount,
-                    outstandingAmount: new Decimal(0),
-                },
-            customer: {
-                name: entry.contact.name,
-                email: entry.contact.email,
-                phone: entry.contact.phone,
-                company: entry.contact.company,
-                customerProfile: entry.contact.customerProfile,
-            }
-        };
-
-        const pdfBuffer = await generateReceiptPdf(pdfModel, businessName, settings);
-
-        // Send Email
-        const amountStr = entry.amount.toNumber().toLocaleString(undefined, { minimumFractionDigits: 2 });
-        const remainingStr = (entry.obligation?.outstandingAmount ?? new Decimal(0))
-            .toNumber().toLocaleString(undefined, { minimumFractionDigits: 2 });
-        const paymentDateStr = new Date(entry.entryDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-
+        if (!isEmailConfigured()) {
+            throw new AppError(
+                'Receipt email is unavailable. The entry is saved; print the receipt or try sending later.',
+                503,
+                'EMAIL_UNAVAILABLE',
+            );
+        }
+        const pdfBuffer = await generateReceiptPdf(model, settings);
+        const paymentDate = new Date(model.paymentDate).toLocaleDateString('en-GB', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            timeZone: model.timezone,
+        });
         const html = receiptEmailTemplate({
-            customerName: entry.contact.name,
-            businessName,
-            receiptNumber: pdfModel.receiptNumber,
-            obligationName: entry.obligation?.title ?? entry.description,
-            currency: entry.cashbook.currency,
-            amountPaid: amountStr,
-            paymentDate: paymentDateStr,
-            remainingBal: remainingStr,
-            logoUrl: invoiceLogoUrl(settings?.logoKey),
+            customerName: model.customer.name,
+            businessName: model.business.name,
+            businessDetails: [
+                model.business.legalName,
+                model.business.address,
+                model.business.phone,
+                model.business.email,
+            ].filter((v): v is string => !!v),
+            receiptNumber: model.receiptNumber,
+            obligationName: model.obligation?.title ?? model.description,
+            currency: model.currency,
+            amountPaid: formatReceiptMoney(model.amountPaid),
+            paymentDate,
+            remainingBal: model.obligation
+                ? formatReceiptMoney(model.obligation.outstandingAmount)
+                : null,
+            logoUrl: model.business.logoUrl,
         });
-
         await sendEmail({
-            to: entry.contact.email,
-            subject: `Payment Receipt - ${entry.obligation?.title ?? entry.description}`,
+            to: model.customer.email,
+            subject: `Payment Receipt - ${model.obligation?.title ?? model.description}`,
             html,
-            attachments: [{
-                filename: `Receipt_${pdfModel.receiptNumber}.pdf`,
-                content: pdfBuffer,
-                contentType: 'application/pdf',
-            }]
+            ...(model.business.email && z.string().email().safeParse(model.business.email).success
+                ? { replyTo: model.business.email }
+                : {}),
+            attachments: [
+                {
+                    filename: `Receipt_${model.receiptNumber}.pdf`,
+                    content: pdfBuffer,
+                    contentType: 'application/pdf',
+                },
+            ],
         });
-
-        // Log Transparency
-        await this.prisma.auditLog.create({
-            data: {
-                userId,
-                workspaceId,
-                action: 'RECEIPT_SENT' as any,
-                resource: 'entry',
-                resourceId: entry.id,
-                details: {
-                    sentTo: entry.contact.email,
-                    amount: entry.amount.toString(),
-                    remainingBalance: (entry.obligation?.outstandingAmount ?? new Decimal(0)).toString(),
-                } as any,
-            }
-        });
-
-        return { success: true };
+        // SMTP has already accepted the message; an audit outage must not report
+        // a failed delivery and encourage another send.
+        try {
+            await this.prisma.auditLog.create({
+                data: {
+                    userId,
+                    workspaceId,
+                    action: 'RECEIPT_SENT',
+                    resource: 'entry',
+                    resourceId: entryId,
+                    details: {
+                        sentTo: model.customer.email,
+                        amount: model.amountPaid,
+                        entryVersion: model.entryVersion,
+                    },
+                },
+            });
+        } catch (error) {
+            logger.error('Receipt accepted by email transport but audit could not be saved', {
+                entryId,
+                error,
+            });
+        }
+        return { success: true, sentTo: model.customer.email };
     }
 
     /**
@@ -2173,9 +2341,9 @@ export class EntriesService {
 
                 const obligation = moved.obligationId
                     ? await tx.cashbookObligation.findUnique({
-                        where: { id: moved.obligationId },
-                        select: { id: true, type: true },
-                    })
+                          where: { id: moved.obligationId },
+                          select: { id: true, type: true },
+                      })
                     : null;
 
                 await this.postingService.repost(tx, {
@@ -2199,7 +2367,10 @@ export class EntriesService {
                         categoryId: moved.categoryId,
                         contactId: moved.contactId,
                         obligation: obligation
-                            ? { id: obligation.id, type: obligation.type as 'RECEIVABLE' | 'PAYABLE' }
+                            ? {
+                                  id: obligation.id,
+                                  type: obligation.type as 'RECEIVABLE' | 'PAYABLE',
+                              }
                             : null,
                     }),
                 });
@@ -2255,23 +2426,51 @@ export class EntriesService {
     private async validateEntryReferences(
         tx: Prisma.TransactionClient,
         workspaceId: string,
-        dto: { contactId?: string | null; categoryId?: string | null; paymentModeId?: string | null },
+        dto: {
+            contactId?: string | null;
+            categoryId?: string | null;
+            paymentModeId?: string | null;
+        },
     ) {
         // Foreign keys alone do not enforce tenant ownership. This is also
         // used by shared-entry acceptance, which accepts recipient-side tags.
         const checks = await Promise.all([
-            dto.contactId ? tx.contact.findFirst({ where: { id: dto.contactId, workspaceId, isActive: true }, select: { id: true } }) : true,
-            dto.categoryId ? tx.category.findFirst({ where: { id: dto.categoryId, workspaceId, isActive: true }, select: { id: true } }) : true,
-            dto.paymentModeId ? tx.paymentMode.findFirst({ where: { id: dto.paymentModeId, workspaceId, isActive: true }, select: { id: true } }) : true,
+            dto.contactId
+                ? tx.contact.findFirst({
+                      where: { id: dto.contactId, workspaceId, isActive: true },
+                      select: { id: true },
+                  })
+                : true,
+            dto.categoryId
+                ? tx.category.findFirst({
+                      where: { id: dto.categoryId, workspaceId, isActive: true },
+                      select: { id: true },
+                  })
+                : true,
+            dto.paymentModeId
+                ? tx.paymentMode.findFirst({
+                      where: { id: dto.paymentModeId, workspaceId, isActive: true },
+                      select: { id: true },
+                  })
+                : true,
         ]);
-        if (checks.some(value => !value)) throw new AppError('Contact, category and payment mode must belong to this workspace and be active', 400, 'INVALID_ENTRY_REFERENCE');
+        if (checks.some((value) => !value))
+            throw new AppError(
+                'Contact, category and payment mode must belong to this workspace and be active',
+                400,
+                'INVALID_ENTRY_REFERENCE',
+            );
     }
 
     private async assertCanPostToCashbook(cashbookId: string, workspaceId: string, userId: string) {
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: cashbookId },
             select: {
-                id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                id: true,
+                name: true,
+                workspaceId: true,
+                isActive: true,
+                currency: true,
                 archivedAt: true,
             },
         });
@@ -2289,7 +2488,10 @@ export class EntriesService {
             where: { cashbookId_userId: { cashbookId, userId } },
             select: { role: true },
         });
-        if (!membership || !hasPermission(membership.role as never, CashbookPermission.CREATE_ENTRY)) {
+        if (
+            !membership ||
+            !hasPermission(membership.role as never, CashbookPermission.CREATE_ENTRY)
+        ) {
             throw new AuthorizationError(
                 'You cannot record entries in that book. Choose one you have access to.',
             );

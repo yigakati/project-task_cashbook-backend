@@ -8,7 +8,7 @@ import {
     requireApiKeyBookAccess,
 } from '../../middlewares/authenticateApiKey';
 import { integrateEntrySchema, integrateBatchSchema } from './integration.dto';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const router = Router();
 const ctrl = container.resolve(IntegrationController);
@@ -26,7 +26,7 @@ const integrationLimiter = rateLimit({
     keyGenerator: (req) => {
         // Authentication runs first, so never retain or key a limiter on the
         // raw secret (including a prefix of it).
-        return (req as any).apiKey?.id ?? req.ip ?? 'unknown';
+        return (req as any).apiKey?.id ?? ipKeyGenerator(req.ip ?? 'unknown');
     },
     message: {
         success: false,

@@ -7,11 +7,14 @@ import { CashbookPermission, hasPermission } from '../../core/types/permissions'
 
 @injectable()
 export class EntriesController {
-    constructor(private entriesService: EntriesService) { }
+    constructor(private entriesService: EntriesService) {}
 
     async getAll(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const result = await this.entriesService.getEntries(req.params.cashbookId as string, req.query as any);
+            const result = await this.entriesService.getEntries(
+                req.params.cashbookId as string,
+                req.query as any,
+            );
             res.status(StatusCodes.OK).json({
                 success: true,
                 message: 'Entries retrieved successfully',
@@ -22,7 +25,11 @@ export class EntriesController {
         }
     }
 
-    async filterOptions(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async filterOptions(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             // Only someone who may see the book's members gets its full roster;
             // everyone else sees just the people whose entries they can see.
@@ -32,7 +39,11 @@ export class EntriesController {
                 req.params.cashbookId as string,
                 includeRoster,
             );
-            res.status(StatusCodes.OK).json({ success: true, message: 'Filter options retrieved', data });
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Filter options retrieved',
+                data,
+            });
         } catch (error) {
             next(error);
         }
@@ -40,7 +51,10 @@ export class EntriesController {
 
     async getOne(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const entry = await this.entriesService.getEntry(req.params.entryId as string);
+            const entry = await this.entriesService.getEntry(
+                req.params.entryId as string,
+                req.params.cashbookId as string,
+            );
             res.status(StatusCodes.OK).json({
                 success: true,
                 message: 'Entry retrieved successfully',
@@ -56,7 +70,7 @@ export class EntriesController {
             const entry = await this.entriesService.createEntry(
                 req.params.cashbookId as string,
                 req.user.userId,
-                req.body
+                req.body,
             );
             res.status(StatusCodes.CREATED).json({
                 success: true,
@@ -70,9 +84,14 @@ export class EntriesController {
 
     async sharing(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const data = await this.entriesService.getEntrySharing(req.params.entryId as string, req.params.cashbookId as string);
+            const data = await this.entriesService.getEntrySharing(
+                req.params.entryId as string,
+                req.params.cashbookId as string,
+            );
             res.json({ success: true, data });
-        } catch (error) { next(error); }
+        } catch (error) {
+            next(error);
+        }
     }
 
     async update(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
@@ -80,7 +99,7 @@ export class EntriesController {
             const entry = await this.entriesService.updateEntry(
                 req.params.entryId as string,
                 req.user.userId,
-                req.body
+                req.body,
             );
             res.status(StatusCodes.OK).json({
                 success: true,
@@ -119,7 +138,7 @@ export class EntriesController {
                 req.params.entryId as string,
                 req.user.userId,
                 req.body.reason,
-                cashbookRole
+                cashbookRole,
             );
             res.status(StatusCodes.OK).json({
                 success: true,
@@ -131,10 +150,17 @@ export class EntriesController {
     }
 
     // ─── Delete Requests ───────────────────────────────
-    async getDeleteRequests(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async getDeleteRequests(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             const status = req.query.status as string | undefined;
-            const requests = await this.entriesService.getDeleteRequests(req.params.cashbookId as string, status);
+            const requests = await this.entriesService.getDeleteRequests(
+                req.params.cashbookId as string,
+                status,
+            );
             res.status(StatusCodes.OK).json({
                 success: true,
                 message: 'Delete requests retrieved',
@@ -145,12 +171,16 @@ export class EntriesController {
         }
     }
 
-    async reviewDeleteRequest(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async reviewDeleteRequest(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
             const result = await this.entriesService.reviewDeleteRequest(
                 req.params.requestId as string,
                 req.user.userId,
-                req.body
+                req.body,
             );
             res.status(StatusCodes.OK).json({
                 success: true,
@@ -162,9 +192,16 @@ export class EntriesController {
     }
 
     // ─── Audit Trail ───────────────────────────────────
-    async getAuditTrail(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async getAuditTrail(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
-            const audits = await this.entriesService.getEntryAuditTrail(req.params.entryId as string);
+            const audits = await this.entriesService.getEntryAuditTrail(
+                req.params.entryId as string,
+                req.params.cashbookId as string,
+            );
             res.status(StatusCodes.OK).json({
                 success: true,
                 message: 'Entry audit trail retrieved',
@@ -177,9 +214,16 @@ export class EntriesController {
 
     // ─── Receipts ──────────────────────────────────────
     /** The receipt as data, so the client can render and print it. */
-    async receiptModel(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    async receiptModel(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
         try {
-            const data = await this.entriesService.getReceiptModel(req.params.entryId as string);
+            const data = await this.entriesService.getReceiptModel(
+                req.params.entryId as string,
+                req.params.cashbookId as string,
+            );
             res.status(StatusCodes.OK).json({ success: true, message: 'Receipt', data });
         } catch (error) {
             next(error);
@@ -188,10 +232,16 @@ export class EntriesController {
 
     async sendReceipt(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            await this.entriesService.sendReceipt(req.params.entryId as string, req.user.userId);
+            const data = await this.entriesService.sendReceipt(
+                req.params.entryId as string,
+                req.user.userId,
+                req.params.cashbookId as string,
+                req.body,
+            );
             res.status(StatusCodes.OK).json({
                 success: true,
-                message: 'Receipt sent successfully',
+                message: 'Receipt accepted by email transport',
+                data,
             });
         } catch (error) {
             next(error);
