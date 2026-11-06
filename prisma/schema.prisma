@@ -2146,6 +2146,7 @@ model Invoice {
   amountDue      Decimal       @default(0) @map("amount_due") @db.Decimal(20, 4)
   notes          String?
   footer         String?
+  paymentTerms   String?       @map("payment_terms")
 
   /// Who this was billed to, frozen when the invoice left DRAFT.
   ///
@@ -2180,6 +2181,7 @@ model Invoice {
 model InvoiceItem {
   id                String            @id @default(uuid()) @db.Uuid
   invoiceId         String            @map("invoice_id") @db.Uuid
+  position          Int               @default(0)
   productServiceId  String?           @map("product_service_id") @db.Uuid
   inventoryItemId   String?           @map("inventory_item_id") @db.Uuid
   lineType          InvoiceLineType   @default(SALE) @map("line_type")
@@ -2216,7 +2218,9 @@ model InvoiceSettings {
   /// Bytes the logo takes against the workspace storage allowance.
   logoSize      Int?     @map("logo_size")
   accentColor   String?  @default("#4F46E5") @map("accent_color")
-  template      String   @default("classic") // classic | modern | contemporary
+  template      String   @default("classic")
+  customization Json     @default("{}")
+  version       Int      @default(1)
   defaultTerms  String?  @map("default_terms")
   defaultFooter String?  @map("default_footer")
   defaultNotes  String?  @map("default_notes")

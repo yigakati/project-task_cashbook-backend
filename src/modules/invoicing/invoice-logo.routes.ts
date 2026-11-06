@@ -18,7 +18,9 @@ export const invoiceLogoRouter = Router();
 
 invoiceLogoRouter.get('/:file', async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const key = await container.resolve(InvoicingService).resolveLogoKey(req.params.file as string);
+        const key = await container
+            .resolve(InvoicingService)
+            .resolveLogoKey(req.params.file as string);
         const stream = await container.resolve(StorageService).getObject(key);
 
         res.setHeader('Content-Type', 'image/png');

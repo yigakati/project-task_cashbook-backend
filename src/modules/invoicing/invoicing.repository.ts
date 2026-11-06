@@ -3,7 +3,7 @@ import { PrismaClient, InvoiceStatus } from '@prisma/client';
 
 @injectable()
 export class InvoicingRepository {
-    constructor(@inject('PrismaClient') private prisma: PrismaClient) { }
+    constructor(@inject('PrismaClient') private prisma: PrismaClient) {}
 
     async findByWorkspace(
         workspaceId: string,
@@ -16,7 +16,7 @@ export class InvoicingRepository {
             endDate?: string;
             sortBy: string;
             sortOrder: 'asc' | 'desc';
-        }
+        },
     ) {
         const where: any = { workspaceId };
         if (options.status) where.status = options.status;
@@ -34,7 +34,9 @@ export class InvoicingRepository {
                 take: options.take,
                 orderBy: { [options.sortBy]: options.sortOrder },
                 include: {
-                    customer: { select: { id: true, name: true, email: true, phone: true, company: true } },
+                    customer: {
+                        select: { id: true, name: true, email: true, phone: true, company: true },
+                    },
                     _count: { select: { items: true } },
                 },
             }),
@@ -49,15 +51,24 @@ export class InvoicingRepository {
             where: { id },
             include: {
                 customer: {
-                    select: { id: true, name: true, email: true, phone: true, company: true, customerProfile: true },
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phone: true,
+                        company: true,
+                        customerProfile: true,
+                    },
                 },
                 items: {
                     include: {
-                        productService: { select: { id: true, name: true, type: true, inventoryItemId: true } },
+                        productService: {
+                            select: { id: true, name: true, type: true, inventoryItemId: true },
+                        },
                         inventoryItem: { select: { name: true, sku: true, unit: true } },
                         tax: { select: { id: true, name: true, rate: true } },
                     },
-                    orderBy: { id: 'asc' },
+                    orderBy: [{ position: 'asc' }, { id: 'asc' }],
                 },
             },
         });

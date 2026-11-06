@@ -82,6 +82,9 @@ const envSchema = z.object({
      */
     PLAN_LIMITS_ENFORCED: z.string().default('false').transform((v) => v === 'true'),
 
+    /** Enable invoice paid-plan selection rules when subscriptions launch. */
+    INVOICE_SUBSCRIPTIONS_ACTIVE: z.string().default('false').transform((val) => val === 'true'),
+
     /**
      * Double-entry ledger rollout switch.
      *

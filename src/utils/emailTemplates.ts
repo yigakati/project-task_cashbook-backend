@@ -149,7 +149,22 @@ export function invoiceEmailTemplate(params: {
         itemsSummary,
         notes,
         logoUrl,
-    } = params;
+    } = {
+        ...params,
+        customerName: escapeHtml(params.customerName),
+        businessName: escapeHtml(params.businessName),
+        invoiceNumber: escapeHtml(params.invoiceNumber),
+        currency: escapeHtml(params.currency),
+        totalAmount: escapeHtml(params.totalAmount),
+        dueDate: escapeHtml(params.dueDate),
+        notes: params.notes ? escapeHtml(params.notes) : null,
+        logoUrl: params.logoUrl ? escapeHtml(params.logoUrl) : null,
+        itemsSummary: params.itemsSummary.map((item) => ({
+            name: escapeHtml(item.name),
+            quantity: escapeHtml(item.quantity),
+            total: escapeHtml(item.total),
+        })),
+    };
 
     const FALLBACK_LOGO = 'https://inchange.odixtec.com/reportlogo.svg';
     const logo = logoUrl || FALLBACK_LOGO;

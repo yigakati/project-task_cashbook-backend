@@ -1,11 +1,26 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, InvoiceSettings, InvoiceStatus, ContactType, ObligationStatus, ObligationType, InventoryReferenceType, InventoryTransactionType } from '@prisma/client';
+import {
+    PrismaClient,
+    InvoiceSettings,
+    InvoiceStatus,
+    ContactType,
+    ObligationStatus,
+    ObligationType,
+    InventoryReferenceType,
+    InventoryTransactionType,
+} from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { InvoicingRepository } from './invoicing.repository';
 import { AppError, NotFoundError } from '../../core/errors/AppError';
 import { AuditAction } from '../../core/types';
-import { generateInvoicePdf } from './pdf.generator';
-import { sendEmail } from '../../config/email';
+import { generateInvoicePdf, renderInvoicePdf } from './pdf.generator';
+import { buildInvoiceDocument, sampleInvoiceDocument } from './invoice-document';
+import { invoiceTemplates, invoiceTemplate, invoiceDesignAccess } from './invoice-templates';
+import { config } from '../../config';
+import { planOf } from '../../core/billing/entitlements';
+import { Prisma } from '@prisma/client';
+import { sendEmail, isEmailConfigured } from '../../config/email';
+import { formatReceiptMoney } from '../entries/receipt.generator';
 import { invoiceEmailTemplate } from '../../utils/emailTemplates';
 import { InventoryService } from '../inventory/inventory.service';
 import {
@@ -21,15 +36,12 @@ import { logger } from '../../utils/logger';
 import { StorageService } from '../files/storage.service';
 import { assertCashbookWritable } from '../cashbooks/cashbook-state';
 import { LOGO_FILE_PATTERN, LOGO_PREFIX, invoiceLogoUrl, logoObjectKey } from './invoice-logo';
-import {
-    assertStorageAvailable,
-    lockWorkspaceStorage,
-} from '../storage/storage-quota.service';
+import { assertStorageAvailable, lockWorkspaceStorage } from '../storage/storage-quota.service';
 
 // ─── Internal type for calculated line items ───────────────────────────────────
 interface CalculatedItem {
     productServiceId?: string;
-    inventoryItemId?: string;  // resolved from productService.inventoryItemId or item-level override
+    inventoryItemId?: string; // resolved from productService.inventoryItemId or item-level override
     lineType: 'SALE' | 'RENTAL';
     name: string;
     description?: string;
@@ -52,7 +64,7 @@ export class InvoicingService {
         private inventoryService: InventoryService,
         private storage: StorageService,
         @inject('PrismaClient') private prisma: PrismaClient,
-    ) { }
+    ) {}
 
     /**
      * Settings as the API hands them out.
@@ -83,14 +95,22 @@ export class InvoicingService {
             throw new NotFoundError('Customer');
         }
         if (customer.type !== ContactType.CUSTOMER) {
-            throw new AppError('Contact must be of type CUSTOMER to create an invoice', 400, 'INVALID_CUSTOMER_TYPE');
+            throw new AppError(
+                'Contact must be of type CUSTOMER to create an invoice',
+                400,
+                'INVALID_CUSTOMER_TYPE',
+            );
         }
 
         // Validate cashbook
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: dto.cashbookId },
             select: {
-                id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                id: true,
+                name: true,
+                workspaceId: true,
+                isActive: true,
+                currency: true,
                 archivedAt: true,
             },
         });
@@ -107,7 +127,8 @@ export class InvoicingService {
         assertSameCurrency(cashbook.currency, invoiceCurrency, 'invoice vs cashbook');
 
         // Generate invoice number if not provided
-        const invoiceNumber = dto.invoiceNumber || await this.repository.getNextInvoiceNumber(workspaceId);
+        const invoiceNumber =
+            dto.invoiceNumber || (await this.repository.getNextInvoiceNumber(workspaceId));
 
         // Check for duplicate invoice number
         const existingInvoice = await this.prisma.invoice.findUnique({
@@ -119,17 +140,27 @@ export class InvoicingService {
 
         // Validate due date >= issue date
         if (new Date(dto.dueDate) < new Date(dto.issueDate)) {
-            throw new AppError('Due date must be on or after the issue date', 400, 'INVALID_DUE_DATE');
+            throw new AppError(
+                'Due date must be on or after the issue date',
+                400,
+                'INVALID_DUE_DATE',
+            );
         }
 
         // Server-side calculations (resolves inventoryItemId via product service link)
         const { items, subtotal, taxAmount, discountAmount, totalAmount, amountDue } =
-            await this.calculateInvoiceTotals(workspaceId, dto.items, dto.discountAmount, invoiceCurrency);
+            await this.calculateInvoiceTotals(
+                workspaceId,
+                dto.items,
+                dto.discountAmount,
+                invoiceCurrency,
+            );
 
         if (totalAmount.lessThan(0)) {
             throw new AppError('Invoice total cannot be negative', 400, 'NEGATIVE_TOTAL');
         }
 
+        const defaults = await this.repository.getInvoiceSettings(workspaceId);
         const invoice = await this.prisma.$transaction(async (tx) => {
             const inv = await tx.invoice.create({
                 data: {
@@ -146,8 +177,12 @@ export class InvoicingService {
                     totalAmount,
                     amountPaid: new Decimal(0),
                     amountDue,
-                    notes: dto.notes || null,
-                    footer: dto.footer || null,
+                    notes: dto.notes === undefined ? defaults?.defaultNotes : dto.notes || null,
+                    footer: dto.footer === undefined ? defaults?.defaultFooter : dto.footer || null,
+                    paymentTerms:
+                        dto.paymentTerms === undefined
+                            ? defaults?.defaultTerms
+                            : dto.paymentTerms || null,
                     createdById: userId,
                     cashbookId: dto.cashbookId,
                 } as any,
@@ -155,7 +190,8 @@ export class InvoicingService {
 
             // Create invoice items — including line type, rental fields, inventory snapshot
             await tx.invoiceItem.createMany({
-                data: items.map(item => ({
+                data: items.map((item, position) => ({
+                    position,
                     invoiceId: inv.id,
                     productServiceId: item.productServiceId || null,
                     inventoryItemId: item.inventoryItemId || null,
@@ -177,11 +213,16 @@ export class InvoicingService {
 
             await tx.auditLog.create({
                 data: {
-                    userId, workspaceId,
+                    userId,
+                    workspaceId,
                     action: AuditAction.INVOICE_CREATED,
                     resource: 'invoice',
                     resourceId: inv.id,
-                    details: { invoiceNumber, customerId: dto.customerId, totalAmount: totalAmount.toString() } as any,
+                    details: {
+                        invoiceNumber,
+                        customerId: dto.customerId,
+                        totalAmount: totalAmount.toString(),
+                    } as any,
                 },
             });
 
@@ -195,7 +236,12 @@ export class InvoicingService {
     // ─── Update Invoice (DRAFT only) ───────────────────────
     // ═══════════════════════════════════════════════════════
 
-    async updateInvoice(invoiceId: string, workspaceId: string, userId: string, dto: UpdateInvoiceDto) {
+    async updateInvoice(
+        invoiceId: string,
+        workspaceId: string,
+        userId: string,
+        dto: UpdateInvoiceDto,
+    ) {
         const existing = await this.repository.findById(invoiceId);
         if (!existing || existing.workspaceId !== workspaceId) {
             throw new NotFoundError('Invoice');
@@ -206,22 +252,35 @@ export class InvoicingService {
         }
 
         if (dto.customerId) {
-            const customer = await this.prisma.contact.findUnique({ where: { id: dto.customerId } });
-            if (!customer || customer.workspaceId !== workspaceId || customer.type !== ContactType.CUSTOMER) {
+            const customer = await this.prisma.contact.findUnique({
+                where: { id: dto.customerId },
+            });
+            if (
+                !customer ||
+                customer.workspaceId !== workspaceId ||
+                customer.type !== ContactType.CUSTOMER
+            ) {
                 throw new AppError('Invalid customer', 400, 'INVALID_CUSTOMER');
             }
         }
 
         if (dto.invoiceNumber && dto.invoiceNumber !== existing.invoiceNumber) {
             const dup = await this.prisma.invoice.findUnique({
-                where: { workspaceId_invoiceNumber: { workspaceId, invoiceNumber: dto.invoiceNumber } },
+                where: {
+                    workspaceId_invoiceNumber: { workspaceId, invoiceNumber: dto.invoiceNumber },
+                },
             });
-            if (dup) throw new AppError('Invoice number already exists', 409, 'DUPLICATE_INVOICE_NUMBER');
+            if (dup)
+                throw new AppError(
+                    'Invoice number already exists',
+                    409,
+                    'DUPLICATE_INVOICE_NUMBER',
+                );
         }
 
         const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
         if (!workspace || !workspace.isActive) throw new NotFoundError('Workspace');
-        const nextCurrency = normalizeCurrency(workspace.defaultCurrency);
+        const nextCurrency = normalizeCurrency(existing.currency);
         if (dto.currency) {
             assertSameCurrency(nextCurrency, dto.currency, 'workspace base vs invoice');
         }
@@ -231,7 +290,11 @@ export class InvoicingService {
                 const cashbook = await this.prisma.cashbook.findUnique({
                     where: { id: cashbookId },
                     select: {
-                        id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                        id: true,
+                        name: true,
+                        workspaceId: true,
+                        isActive: true,
+                        currency: true,
                         archivedAt: true,
                     },
                 });
@@ -243,62 +306,80 @@ export class InvoicingService {
             }
         }
 
-        let calculatedData: any = {};
-        if (dto.items) {
-            const { items, subtotal, taxAmount, discountAmount, totalAmount, amountDue } =
-                await this.calculateInvoiceTotals(workspaceId, dto.items, dto.discountAmount, nextCurrency);
-
-            if (totalAmount.lessThan(0)) {
-                throw new AppError('Invoice total cannot be negative', 400, 'NEGATIVE_TOTAL');
+        const issueDate = dto.issueDate ? new Date(dto.issueDate) : existing.issueDate;
+        const dueDate = dto.dueDate ? new Date(dto.dueDate) : existing.dueDate;
+        if (dueDate < issueDate)
+            throw new AppError(
+                'Due date must be on or after the issue date',
+                400,
+                'INVALID_DUE_DATE',
+            );
+        const calculated = dto.items
+            ? await this.calculateInvoiceTotals(
+                  workspaceId,
+                  dto.items,
+                  dto.discountAmount ?? existing.discountAmount.toString(),
+                  nextCurrency,
+              )
+            : null;
+        const discountAmount = new Decimal(dto.discountAmount ?? existing.discountAmount);
+        const totalAmount =
+            calculated?.totalAmount ??
+            new Decimal(existing.subtotal).sub(discountAmount).add(existing.taxAmount);
+        if (totalAmount.lessThan(0))
+            throw new AppError('Invoice total cannot be negative', 400, 'NEGATIVE_TOTAL');
+        await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoiceId}::uuid FOR UPDATE`;
+            const current = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
+            if (
+                current.status !== 'DRAFT' ||
+                current.updatedAt.getTime() !== existing.updatedAt.getTime()
+            ) {
+                throw new AppError(
+                    'This invoice changed. Reload it before editing.',
+                    409,
+                    'INVOICE_CONFLICT',
+                );
             }
-
-            calculatedData = { subtotal, taxAmount, discountAmount, totalAmount, amountDue };
-
-            await this.prisma.$transaction(async (tx) => {
+            if (calculated) {
                 await tx.invoiceItem.deleteMany({ where: { invoiceId } });
                 await tx.invoiceItem.createMany({
-                    data: items.map(item => ({
+                    data: calculated.items.map((item, position) => ({
+                        ...item,
                         invoiceId,
-                        productServiceId: item.productServiceId || null,
-                        inventoryItemId: item.inventoryItemId || null,
-                        lineType: item.lineType as any,
-                        name: item.name,
-                        description: item.description || null,
-                        quantity: item.quantity,
-                        unitPrice: item.unitPrice,
-                        taxId: item.taxId || null,
-                        taxRate: item.taxRate,
-                        taxAmount: item.taxAmount,
-                        total: item.total,
-                        rentalStart: item.rentalStart || null,
-                        rentalEnd: item.rentalEnd || null,
-                        rentalPeriodUnit: (item.rentalPeriodUnit as any) || null,
-                        rentalPeriodCount: item.rentalPeriodCount ?? null,
+                        position,
                     })),
                 });
+            }
+            await tx.invoice.update({
+                where: { id: invoiceId },
+                data: {
+                    ...(dto.customerId && { customerId: dto.customerId }),
+                    ...(dto.invoiceNumber && { invoiceNumber: dto.invoiceNumber }),
+                    issueDate,
+                    dueDate,
+                    ...(dto.notes !== undefined && { notes: dto.notes }),
+                    ...(dto.footer !== undefined && { footer: dto.footer }),
+                    ...(dto.paymentTerms !== undefined && { paymentTerms: dto.paymentTerms }),
+                    ...(dto.cashbookId && { cashbookId: dto.cashbookId }),
+                    subtotal: calculated?.subtotal ?? existing.subtotal,
+                    taxAmount: calculated?.taxAmount ?? existing.taxAmount,
+                    discountAmount,
+                    totalAmount,
+                    amountDue: totalAmount,
+                },
             });
-        }
-
-        const updated = await this.prisma.invoice.update({
-            where: { id: invoiceId },
-            data: {
-                ...(dto.customerId && { customerId: dto.customerId }),
-                ...(dto.invoiceNumber && { invoiceNumber: dto.invoiceNumber }),
-                ...(dto.issueDate && { issueDate: new Date(dto.issueDate) }),
-                ...(dto.dueDate && { dueDate: new Date(dto.dueDate) }),
-                currency: nextCurrency,
-                ...(dto.notes !== undefined && { notes: dto.notes }),
-                ...(dto.footer !== undefined && { footer: dto.footer }),
-                ...(dto.cashbookId && { cashbookId: dto.cashbookId }),
-                ...calculatedData,
-            } as any,
+            await tx.auditLog.create({
+                data: {
+                    userId,
+                    workspaceId,
+                    action: AuditAction.INVOICE_UPDATED,
+                    resource: 'invoice',
+                    resourceId: invoiceId,
+                },
+            });
         });
-
-        await this.prisma.auditLog.create({
-            data: { userId, workspaceId, action: AuditAction.INVOICE_UPDATED, resource: 'invoice', resourceId: invoiceId },
-        });
-
-        return this.repository.findById(updated.id);
+        return this.repository.findById(invoiceId);
     }
 
     // ═══════════════════════════════════════════════════════
@@ -328,7 +409,11 @@ export class InvoicingService {
         const cashbook = await this.prisma.cashbook.findUnique({
             where: { id: cashbookId },
             select: {
-                id: true, name: true, workspaceId: true, isActive: true, currency: true,
+                id: true,
+                name: true,
+                workspaceId: true,
+                isActive: true,
+                currency: true,
                 archivedAt: true,
             },
         });
@@ -352,6 +437,18 @@ export class InvoicingService {
         let obligationId: string | null = null;
 
         await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoiceId}::uuid FOR UPDATE`;
+            const current = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
+            if (
+                current.status !== 'DRAFT' ||
+                current.updatedAt.getTime() !== invoice.updatedAt.getTime()
+            ) {
+                throw new AppError(
+                    'This invoice changed or was already issued. Reload it before continuing.',
+                    409,
+                    'INVOICE_CONFLICT',
+                );
+            }
             // 1. Mark invoice as SENT, freezing who it was billed to.
             //
             // The customer row is live, and for a contact connected to another
@@ -361,7 +458,10 @@ export class InvoicingService {
             const billTo = await tx.contact.findUnique({
                 where: { id: invoice.customerId },
                 select: {
-                    name: true, email: true, phone: true, company: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                    company: true,
                     customerProfile: {
                         select: { billingAddress: true, taxId: true, accountNumber: true },
                     },
@@ -374,15 +474,15 @@ export class InvoicingService {
                     status: InvoiceStatus.SENT,
                     billToSnapshot: billTo
                         ? ({
-                            name: billTo.name,
-                            email: billTo.email,
-                            phone: billTo.phone,
-                            company: billTo.company,
-                            taxId: billTo.customerProfile?.taxId ?? null,
-                            accountNumber: billTo.customerProfile?.accountNumber ?? null,
-                            billingAddress: billTo.customerProfile?.billingAddress ?? null,
-                            snapshotAt: new Date().toISOString(),
-                        } as any)
+                              name: billTo.name,
+                              email: billTo.email,
+                              phone: billTo.phone,
+                              company: billTo.company,
+                              taxId: billTo.customerProfile?.taxId ?? null,
+                              accountNumber: billTo.customerProfile?.accountNumber ?? null,
+                              billingAddress: billTo.customerProfile?.billingAddress ?? null,
+                              snapshotAt: new Date().toISOString(),
+                          } as any)
                         : undefined,
                 },
             });
@@ -415,15 +515,21 @@ export class InvoicingService {
                 (li: any) => li.lineType === 'RENTAL' && li.inventoryItemId,
             );
             if (rentalLines.length > 0) {
-                const earliestStart = rentalLines.reduce((min: Date, li: any) => {
-                    const d = li.rentalStart ? new Date(li.rentalStart) : new Date();
-                    return d < min ? d : min;
-                }, new Date(rentalLines[0].rentalStart || Date.now()));
-                const latestEnd = rentalLines.reduce((max: Date | null, li: any) => {
-                    if (!li.rentalEnd) return max;
-                    const d = new Date(li.rentalEnd);
-                    return !max || d > max ? d : max;
-                }, null as Date | null);
+                const earliestStart = rentalLines.reduce(
+                    (min: Date, li: any) => {
+                        const d = li.rentalStart ? new Date(li.rentalStart) : new Date();
+                        return d < min ? d : min;
+                    },
+                    new Date(rentalLines[0].rentalStart || Date.now()),
+                );
+                const latestEnd = rentalLines.reduce(
+                    (max: Date | null, li: any) => {
+                        if (!li.rentalEnd) return max;
+                        const d = new Date(li.rentalEnd);
+                        return !max || d > max ? d : max;
+                    },
+                    null as Date | null,
+                );
 
                 const rental = await tx.inventoryRental.create({
                     data: {
@@ -492,79 +598,16 @@ export class InvoicingService {
 
             // 4. Audit log
             await tx.auditLog.create({
-                data: { userId, workspaceId, action: AuditAction.INVOICE_SENT, resource: 'invoice', resourceId: invoiceId },
+                data: {
+                    userId,
+                    workspaceId,
+                    action: AuditAction.INVOICE_SENT,
+                    resource: 'invoice',
+                    resourceId: invoiceId,
+                },
             });
         });
 
-        // 5. Generate ephemeral PDF and send professional email (outside transaction — failure is non-blocking)
-        try {
-            if (invoice.customer.email) {
-                const [settings, workspace] = await Promise.all([
-                    this.repository.getInvoiceSettings(workspaceId),
-                    this.prisma.workspace.findUnique({ where: { id: workspaceId } }),
-                ]);
-
-                // Fetch the freshly-sent invoice with inventory item data for PDF
-                const invoiceForPdf = await this.prisma.invoice.findUnique({
-                    where: { id: invoiceId },
-                    include: {
-                        customer: {
-                            select: { id: true, name: true, email: true, phone: true, company: true, customerProfile: true },
-                        },
-                        items: {
-                            include: {
-                                inventoryItem: { select: { name: true, sku: true, unit: true } },
-                                tax: { select: { id: true, name: true, rate: true } },
-                            },
-                            orderBy: { id: 'asc' },
-                        },
-                    },
-                });
-
-                const businessName = workspace?.name || 'Business';
-                const pdfBuffer = await generateInvoicePdf(
-                    invoiceForPdf as any,
-                    settings,
-                    businessName,
-                );
-
-                // Build items summary for email body (≤5 shown inline, rest noted)
-                const itemsSummary = (invoiceForPdf?.items || []).map(item => ({
-                    name: item.name,
-                    quantity: String(item.quantity),
-                    total: Number(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-                }));
-
-                const htmlBody = invoiceEmailTemplate({
-                    customerName: invoice.customer.name,
-                    businessName,
-                    invoiceNumber: invoice.invoiceNumber,
-                    currency: invoice.currency,
-                    totalAmount: Number(invoice.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-                    dueDate: new Date(invoice.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-                    itemsSummary,
-                    notes: invoice.notes,
-                    logoUrl: invoiceLogoUrl(settings?.logoKey),
-                });
-
-                await sendEmail({
-                    to: invoice.customer.email,
-                    subject: `Invoice ${invoice.invoiceNumber} from ${businessName}`,
-                    html: htmlBody,
-                    attachments: [{
-                        filename: `${invoice.invoiceNumber}.pdf`,
-                        content: pdfBuffer,
-                        contentType: 'application/pdf',
-                    }],
-                });
-            }
-        } catch (_err) {
-            // Email / PDF failure must not roll back the send operation.
-            // Invoice is already SENT and obligation already created.
-        }
-
-        // Optional: apply full or partial payment against the new receivable (one-click pay).
-        // Uses EntriesService so obligation + invoice status stay in sync with normal payment flow.
         let paymentEntry: unknown = null;
         if (payment?.paymentAmount && obligationId) {
             // An account is required so the payment entry is linked to a wallet.
@@ -603,11 +646,105 @@ export class InvoicingService {
             }
         }
 
+        // 5. Generate ephemeral PDF and send professional email (outside transaction — failure is non-blocking)
+        let emailDelivery: 'sent' | 'failed' | 'not_configured' | 'no_email' = invoice.customer
+            .email
+            ? 'not_configured'
+            : 'no_email';
+        try {
+            if (invoice.customer.email && isEmailConfigured()) {
+                const [settings, workspace, profile] = await Promise.all([
+                    this.repository.getInvoiceSettings(workspaceId),
+                    this.prisma.workspace.findUnique({ where: { id: workspaceId } }),
+                    this.prisma.workspaceProfile.findUnique({ where: { workspaceId } }),
+                ]);
+
+                // Fetch the freshly-sent invoice with inventory item data for PDF
+                const invoiceForPdf = await this.prisma.invoice.findUnique({
+                    where: { id: invoiceId },
+                    include: {
+                        customer: {
+                            select: {
+                                id: true,
+                                name: true,
+                                email: true,
+                                phone: true,
+                                company: true,
+                                customerProfile: true,
+                            },
+                        },
+                        items: {
+                            include: {
+                                inventoryItem: { select: { name: true, sku: true, unit: true } },
+                                tax: { select: { id: true, name: true, rate: true } },
+                            },
+                            orderBy: [{ position: 'asc' }, { id: 'asc' }],
+                        },
+                    },
+                });
+
+                const businessName = profile?.displayName || workspace?.name || 'Business';
+                const pdfBuffer = await generateInvoicePdf(
+                    invoiceForPdf as any,
+                    settings,
+                    businessName,
+                    profile,
+                );
+
+                // Build items summary for email body (≤5 shown inline, rest noted)
+                const itemsSummary = (invoiceForPdf?.items || []).map((item) => ({
+                    name: item.name,
+                    quantity: String(item.quantity),
+                    total: formatReceiptMoney(item.total.toString()),
+                }));
+
+                const htmlBody = invoiceEmailTemplate({
+                    customerName: invoice.customer.name,
+                    businessName,
+                    invoiceNumber: invoice.invoiceNumber,
+                    currency: invoice.currency,
+                    totalAmount: formatReceiptMoney(invoice.totalAmount.toString()),
+                    dueDate: new Date(invoice.dueDate).toLocaleDateString('en-GB', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                    }),
+                    itemsSummary,
+                    notes: invoice.notes,
+                    logoUrl: invoiceLogoUrl(settings?.logoKey),
+                });
+
+                await sendEmail({
+                    to: invoice.customer.email,
+                    subject: `Invoice ${invoice.invoiceNumber} from ${businessName}`,
+                    html: htmlBody,
+                    attachments: [
+                        {
+                            filename: `${invoice.invoiceNumber}.pdf`,
+                            content: pdfBuffer,
+                            contentType: 'application/pdf',
+                        },
+                    ],
+                });
+                emailDelivery = 'sent';
+            }
+        } catch (_err) {
+            emailDelivery = 'failed';
+            logger.error('Invoice email could not be delivered', {
+                invoiceId,
+                workspaceId,
+                error: _err instanceof Error ? _err.message : String(_err),
+            });
+            // Email / PDF failure must not roll back the send operation.
+            // Invoice is already SENT and obligation already created.
+        }
+
         const sent = await this.repository.findById(invoiceId);
         return {
             ...sent,
             obligationId,
             paymentApplied: Boolean(paymentEntry),
+            emailDelivery,
         };
     }
 
@@ -629,7 +766,7 @@ export class InvoicingService {
             throw new AppError(
                 'Cannot void an invoice with payments applied. Refund payments first.',
                 400,
-                'HAS_PAYMENTS'
+                'HAS_PAYMENTS',
             );
         }
 
@@ -657,9 +794,8 @@ export class InvoicingService {
                     select: { id: true, cashbookId: true },
                 });
 
-                const { ObligationsService } = await import(
-                    '../cashbook-obligations/obligations.service'
-                );
+                const { ObligationsService } =
+                    await import('../cashbook-obligations/obligations.service');
                 const { container } = await import('tsyringe');
                 const obligationsService = container.resolve(ObligationsService);
 
@@ -678,7 +814,13 @@ export class InvoicingService {
 
             // 4. Audit
             await tx.auditLog.create({
-                data: { userId, workspaceId, action: AuditAction.INVOICE_VOIDED, resource: 'invoice', resourceId: invoiceId },
+                data: {
+                    userId,
+                    workspaceId,
+                    action: AuditAction.INVOICE_VOIDED,
+                    resource: 'invoice',
+                    resourceId: invoiceId,
+                },
             });
         });
 
@@ -700,7 +842,11 @@ export class InvoicingService {
         }
 
         if (new Decimal(invoice.amountPaid).greaterThan(0)) {
-            throw new AppError('Cannot delete an invoice with payments applied', 400, 'HAS_PAYMENTS');
+            throw new AppError(
+                'Cannot delete an invoice with payments applied',
+                400,
+                'HAS_PAYMENTS',
+            );
         }
 
         await this.prisma.$transaction(async (tx) => {
@@ -708,7 +854,13 @@ export class InvoicingService {
             await tx.invoice.delete({ where: { id: invoiceId } });
 
             await tx.auditLog.create({
-                data: { userId, workspaceId, action: AuditAction.INVOICE_DELETED, resource: 'invoice', resourceId: invoiceId },
+                data: {
+                    userId,
+                    workspaceId,
+                    action: AuditAction.INVOICE_DELETED,
+                    resource: 'invoice',
+                    resourceId: invoiceId,
+                },
             });
         });
     }
@@ -743,7 +895,10 @@ export class InvoicingService {
         return {
             data: invoices,
             pagination: {
-                page, limit, total, totalPages,
+                page,
+                limit,
+                total,
+                totalPages,
                 hasNext: page < totalPages,
                 hasPrevious: page > 1,
             },
@@ -761,11 +916,24 @@ export class InvoicingService {
     async getInvoiceSummary(workspaceId: string) {
         const [totalReceivables, overdueCount, statusCounts] = await Promise.all([
             this.prisma.invoice.aggregate({
-                where: { workspaceId, status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.OVERDUE] } },
+                where: {
+                    workspaceId,
+                    status: {
+                        in: [
+                            InvoiceStatus.SENT,
+                            InvoiceStatus.PARTIALLY_PAID,
+                            InvoiceStatus.OVERDUE,
+                        ],
+                    },
+                },
                 _sum: { amountDue: true },
             }),
             this.prisma.invoice.count({
-                where: { workspaceId, status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID] }, dueDate: { lt: new Date() } },
+                where: {
+                    workspaceId,
+                    status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID] },
+                    dueDate: { lt: new Date() },
+                },
             }),
             this.prisma.invoice.groupBy({
                 by: ['status'],
@@ -778,7 +946,7 @@ export class InvoicingService {
         return {
             totalReceivables: totalReceivables._sum.amountDue?.toString() || '0',
             overdueCount,
-            byStatus: statusCounts.map(s => ({
+            byStatus: statusCounts.map((s) => ({
                 status: s.status,
                 count: s._count.id,
                 totalAmount: s._sum.totalAmount?.toString() || '0',
@@ -791,20 +959,22 @@ export class InvoicingService {
             by: ['customerId'],
             where: {
                 workspaceId,
-                status: { in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.OVERDUE] },
+                status: {
+                    in: [InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.OVERDUE],
+                },
             },
             _sum: { amountDue: true },
             _count: { id: true },
         });
 
-        const customerIds = results.map(r => r.customerId);
+        const customerIds = results.map((r) => r.customerId);
         const customers = await this.prisma.contact.findMany({
             where: { id: { in: customerIds } },
             select: { id: true, name: true, email: true },
         });
-        const customerMap = new Map(customers.map(c => [c.id, c]));
+        const customerMap = new Map(customers.map((c) => [c.id, c]));
 
-        return results.map(r => ({
+        return results.map((r) => ({
             customer: customerMap.get(r.customerId) || { id: r.customerId, name: 'Unknown' },
             outstandingAmount: r._sum.amountDue?.toString() || '0',
             invoiceCount: r._count.id,
@@ -815,12 +985,141 @@ export class InvoicingService {
     // ─── Invoice Settings ──────────────────────────────────
     // ═══════════════════════════════════════════════════════
 
+    async designAccess(workspaceId: string) {
+        const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
+        if (!workspace || !workspace.isActive) throw new NotFoundError('Workspace');
+        const { plan } = await planOf(this.prisma, workspace.ownerId);
+        return invoiceDesignAccess(config.NODE_ENV, config.INVOICE_SUBSCRIPTIONS_ACTIVE, plan);
+    }
+
     async getSettings(workspaceId: string) {
-        let settings = await this.repository.getInvoiceSettings(workspaceId);
-        if (!settings) {
-            settings = await this.prisma.invoiceSettings.create({ data: { workspaceId } });
+        const access = await this.designAccess(workspaceId);
+        await this.prisma.invoiceSettings.createMany({
+            data: [{ workspaceId }],
+            skipDuplicates: true,
+        });
+        const settings = await this.prisma.invoiceSettings.findUniqueOrThrow({
+            where: { workspaceId },
+        });
+        return { ...this.withLogoUrl(settings), access, templates: invoiceTemplates };
+    }
+
+    private async assertDesignAccess(
+        workspaceId: string,
+        dto: UpdateInvoiceSettingsDto,
+        current: InvoiceSettings,
+    ) {
+        const access = await this.designAccess(workspaceId);
+        if (
+            dto.template &&
+            dto.template !== current.template &&
+            invoiceTemplate(dto.template).tier === 'premium' &&
+            !access.premiumTemplatesAllowed
+        ) {
+            throw new AppError(
+                'A paid workspace-owner plan is required to select this premium template.',
+                403,
+                'PREMIUM_TEMPLATE_REQUIRED',
+            );
         }
-        return this.withLogoUrl(settings);
+        if (
+            dto.customization &&
+            JSON.stringify(dto.customization) !== JSON.stringify(current.customization) &&
+            !access.customizationAllowed
+        ) {
+            throw new AppError(
+                access.subscriptionsActive
+                    ? 'A paid workspace-owner plan is required for advanced customization.'
+                    : 'Advanced customization becomes available when subscriptions launch.',
+                403,
+                'INVOICE_CUSTOMIZATION_LOCKED',
+            );
+        }
+    }
+
+    async previewDocument(workspaceId: string, dto: UpdateInvoiceSettingsDto = {}) {
+        const settings = await this.getSettings(workspaceId);
+        await this.assertDesignAccess(workspaceId, dto, settings);
+        const [workspace, profile] = await Promise.all([
+            this.prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } }),
+            this.prisma.workspaceProfile.findUnique({ where: { workspaceId } }),
+        ]);
+        const appearance = { ...settings, ...dto } as InvoiceSettings;
+        return sampleInvoiceDocument(
+            appearance,
+            workspace.name,
+            profile,
+            workspace.defaultCurrency,
+        );
+    }
+
+    async draftDocument(workspaceId: string, dto: CreateInvoiceDto) {
+        const [settings, workspace, profile, customer] = await Promise.all([
+            this.repository.getInvoiceSettings(workspaceId),
+            this.prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } }),
+            this.prisma.workspaceProfile.findUnique({ where: { workspaceId } }),
+            this.prisma.contact.findFirst({
+                where: { id: dto.customerId, workspaceId, type: 'CUSTOMER' },
+                include: { customerProfile: true },
+            }),
+        ]);
+        if (!customer) throw new NotFoundError('Customer');
+        assertSameCurrency(workspace.defaultCurrency, dto.currency, 'workspace vs invoice');
+        if (new Date(dto.dueDate) < new Date(dto.issueDate))
+            throw new AppError(
+                'Due date must be on or after the issue date',
+                400,
+                'INVALID_DUE_DATE',
+            );
+        const totals = await this.calculateInvoiceTotals(
+            workspaceId,
+            dto.items,
+            dto.discountAmount,
+            workspace.defaultCurrency,
+        );
+        if (totals.totalAmount.lessThan(0))
+            throw new AppError('Invoice total cannot be negative', 400, 'NEGATIVE_TOTAL');
+        return buildInvoiceDocument(
+            {
+                ...totals,
+                invoiceNumber: dto.invoiceNumber || 'DRAFT',
+                status: 'DRAFT',
+                issueDate: new Date(dto.issueDate),
+                dueDate: new Date(dto.dueDate),
+                currency: workspace.defaultCurrency,
+                customer,
+                amountPaid: new Decimal(0),
+                billToSnapshot: null,
+                notes: dto.notes ?? settings?.defaultNotes ?? null,
+                footer: dto.footer ?? settings?.defaultFooter ?? null,
+                paymentTerms: dto.paymentTerms ?? settings?.defaultTerms ?? null,
+            } as Parameters<typeof buildInvoiceDocument>[0],
+            settings,
+            workspace.name,
+            profile,
+        );
+    }
+
+    async invoiceDocument(invoiceId: string, workspaceId: string) {
+        const invoice = await this.getInvoice(invoiceId, workspaceId);
+        const [settings, workspace, profile] = await Promise.all([
+            this.repository.getInvoiceSettings(workspaceId),
+            this.prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } }),
+            this.prisma.workspaceProfile.findUnique({ where: { workspaceId } }),
+        ]);
+        return buildInvoiceDocument(invoice, settings, workspace.name, profile);
+    }
+
+    async invoicePdf(invoiceId: string, workspaceId: string) {
+        const document = await this.invoiceDocument(invoiceId, workspaceId);
+        const settings = await this.repository.getInvoiceSettings(workspaceId);
+        return renderInvoicePdf(document, settings?.logoKey);
+    }
+
+    async previewPdf(workspaceId: string, dto: UpdateInvoiceSettingsDto) {
+        const document = await this.previewDocument(workspaceId, dto);
+        const settings = await this.repository.getInvoiceSettings(workspaceId);
+        return renderInvoicePdf(document, settings?.logoKey);
     }
 
     /**
@@ -841,47 +1140,53 @@ export class InvoicingService {
     }
 
     async updateSettings(workspaceId: string, userId: string, dto: UpdateInvoiceSettingsDto) {
-        const current = await this.prisma.invoiceSettings.findUnique({
-            where: { workspaceId },
-            select: { logoKey: true },
-        });
-
-        // A logo can be uploaded or removed, not typed in. The URL used to be
-        // free text, which parked the image outside this workspace's storage
-        // allowance and outside anything we could serve or delete.
-        // Re-sending the current value, as the settings form does on every
-        // save, is fine.
-        const data: Record<string, unknown> = { ...dto };
-        delete data.logoUrl; // derived from logoKey, never stored
-        let orphanedLogoKey: string | null = null;
-        if (dto.logoUrl !== undefined && dto.logoUrl !== invoiceLogoUrl(current?.logoKey)) {
-            if (dto.logoUrl !== null) {
+        await this.getSettings(workspaceId);
+        const result = await this.prisma.$transaction(async (tx) => {
+            await lockWorkspaceStorage(tx, workspaceId);
+            const current = await tx.invoiceSettings.findUniqueOrThrow({ where: { workspaceId } });
+            if (dto.version !== undefined && dto.version !== current.version) {
                 throw new AppError(
-                    'Upload the logo as an image file — linking to an image hosted elsewhere is not supported.',
-                    400,
-                    'LOGO_URL_NOT_ALLOWED',
+                    'Invoice settings changed in another session. Reload the saved settings before applying your changes.',
+                    409,
+                    'INVOICE_SETTINGS_CONFLICT',
                 );
             }
-            data.logoKey = null;
-            data.logoSize = null;
-            orphanedLogoKey = current?.logoKey ?? null;
-        }
-
-        const settings = await this.prisma.invoiceSettings.upsert({
-            where: { workspaceId },
-            create: { workspaceId, ...(data as any) },
-            update: data as any,
+            await this.assertDesignAccess(workspaceId, dto, current);
+            const { logoUrl, version, ...fields } = dto;
+            const data: Prisma.InvoiceSettingsUpdateInput = {
+                ...fields,
+                version: { increment: 1 },
+            };
+            let orphanedLogoKey: string | null = null;
+            if (logoUrl !== undefined && logoUrl !== invoiceLogoUrl(current.logoKey)) {
+                if (logoUrl !== null)
+                    throw new AppError(
+                        'Upload the logo as an image file — linking to an image hosted elsewhere is not supported.',
+                        400,
+                        'LOGO_URL_NOT_ALLOWED',
+                    );
+                data.logoKey = null;
+                data.logoSize = null;
+                orphanedLogoKey = current.logoKey;
+            }
+            const settings = await tx.invoiceSettings.update({ where: { workspaceId }, data });
+            await tx.auditLog.create({
+                data: {
+                    userId,
+                    workspaceId,
+                    action: AuditAction.INVOICE_SETTINGS_UPDATED,
+                    resource: 'invoice_settings',
+                    resourceId: settings.id,
+                },
+            });
+            return { settings, orphanedLogoKey };
         });
-
-        // Removed: nothing references the file any more.
-        if (orphanedLogoKey) await this.deleteLogoObject(orphanedLogoKey);
-
-
-        await this.prisma.auditLog.create({
-            data: { userId, workspaceId, action: AuditAction.INVOICE_SETTINGS_UPDATED, resource: 'invoice_settings', resourceId: settings.id },
-        });
-
-        return this.withLogoUrl(settings);
+        if (result.orphanedLogoKey) await this.deleteLogoObject(result.orphanedLogoKey);
+        return {
+            ...this.withLogoUrl(result.settings),
+            access: await this.designAccess(workspaceId),
+            templates: invoiceTemplates,
+        };
     }
 
     async uploadLogo(workspaceId: string, userId: string, file: Express.Multer.File) {
@@ -935,7 +1240,13 @@ export class InvoicingService {
         }
 
         await this.prisma.auditLog.create({
-            data: { userId, workspaceId, action: AuditAction.INVOICE_SETTINGS_UPDATED, resource: 'invoice_settings', resourceId: result.settings.id },
+            data: {
+                userId,
+                workspaceId,
+                action: AuditAction.INVOICE_SETTINGS_UPDATED,
+                resource: 'invoice_settings',
+                resourceId: result.settings.id,
+            },
         });
 
         return this.withLogoUrl(result.settings);
@@ -962,7 +1273,11 @@ export class InvoicingService {
      * Updates the invoice's amount_paid, amount_due, and status.
      * Must run inside the caller's Prisma transaction.
      */
-    static async syncInvoicePayment(tx: any, obligationReferenceId: string, newOutstanding: Decimal) {
+    static async syncInvoicePayment(
+        tx: any,
+        obligationReferenceId: string,
+        newOutstanding: Decimal,
+    ) {
         const { invoiceStatusFromOutstanding } = await import('../../core/finance');
 
         const invoice = await tx.invoice.findUnique({ where: { id: obligationReferenceId } });
@@ -994,7 +1309,11 @@ export class InvoicingService {
      */
     static async syncInvoiceFromObligation(
         tx: any,
-        obligation: { referenceType?: string | null; referenceId?: string | null; outstandingAmount: Decimal },
+        obligation: {
+            referenceType?: string | null;
+            referenceId?: string | null;
+            outstandingAmount: Decimal;
+        },
     ) {
         if (obligation.referenceType !== 'INVOICE' || !obligation.referenceId) return;
         await InvoicingService.syncInvoicePayment(
@@ -1063,7 +1382,13 @@ export class InvoicingService {
 
             if (item.taxId) {
                 const tax = await this.prisma.tax.findUnique({ where: { id: item.taxId } });
-                if (tax && tax.workspaceId === workspaceId && tax.isActive) {
+                if (!tax || tax.workspaceId !== workspaceId || !tax.isActive)
+                    throw new AppError(
+                        `Tax is unavailable for line "${item.name}"`,
+                        400,
+                        'INVALID_TAX',
+                    );
+                if (tax) {
                     taxRate = new Decimal(tax.rate);
                     taxId = tax.id;
                     taxAmount = tax.isCompound ? new Decimal(0) : lineTotal.mul(taxRate).div(100);
@@ -1180,15 +1505,25 @@ export class InvoicingService {
         }
 
         // Second pass: resolve compound taxes
-        const nonCompoundTax = calculatedItems.reduce((sum, i) => sum.add(i.taxAmount), new Decimal(0));
+        const nonCompoundTax = calculatedItems.reduce(
+            (sum, i) => sum.add(i.taxAmount),
+            new Decimal(0),
+        );
         for (const calcItem of calculatedItems) {
             if (calcItem.taxId) {
                 const tax = await this.prisma.tax.findUnique({ where: { id: calcItem.taxId } });
                 if (tax && tax.isCompound) {
-                    const periodMul = calcItem.lineType === 'RENTAL' ? (calcItem.rentalPeriodCount ?? 1) : 1;
-                    const base = calcItem.quantity.mul(calcItem.unitPrice).mul(periodMul).add(nonCompoundTax);
+                    const periodMul =
+                        calcItem.lineType === 'RENTAL' ? (calcItem.rentalPeriodCount ?? 1) : 1;
+                    const base = calcItem.quantity
+                        .mul(calcItem.unitPrice)
+                        .mul(periodMul)
+                        .add(nonCompoundTax);
                     calcItem.taxAmount = base.mul(calcItem.taxRate).div(100);
-                    calcItem.total = calcItem.quantity.mul(calcItem.unitPrice).mul(periodMul).add(calcItem.taxAmount);
+                    calcItem.total = calcItem.quantity
+                        .mul(calcItem.unitPrice)
+                        .mul(periodMul)
+                        .add(calcItem.taxAmount);
                 }
             }
         }
@@ -1214,7 +1549,12 @@ export class InvoicingService {
      * - A new lot is created for FIFO/LIFO items at the same unit cost as the original sale
      * This preserves full audit trail integrity.
      */
-    private async reverseInvoiceInventory(tx: any, invoice: any, workspaceId: string, userId: string) {
+    private async reverseInvoiceInventory(
+        tx: any,
+        invoice: any,
+        workspaceId: string,
+        userId: string,
+    ) {
         // Only reverse if this invoice was ever sent (stock-out happened on SENT transition)
         if (
             invoice.status !== InvoiceStatus.SENT &&

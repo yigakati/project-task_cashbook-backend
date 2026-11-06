@@ -1,18 +1,20 @@
+import { randomInt } from 'node:crypto';
 import { config } from '../../config';
 
 /** Where invoice logos live in the bucket. */
 export const LOGO_PREFIX = 'logos/';
 
-/** The file name our own keys always take: <workspaceId>-<ms>.png */
+/** Accept both legacy timestamps and timestamp-plus-random upload identifiers. */
 export const LOGO_FILE_PATTERN = /^[0-9a-fA-F-]{36}-\d+\.png$/;
 
 /**
  * A fresh key for a workspace's logo.
  *
- * The timestamp makes every upload a new object, so a replaced logo cannot be
+ * The timestamp and random suffix make every upload a new object, so a replaced logo cannot be
  * served from a cache under its old URL.
  */
-export const logoObjectKey = (workspaceId: string) => `${LOGO_PREFIX}${workspaceId}-${Date.now()}.png`;
+export const logoObjectKey = (workspaceId: string) =>
+    `${LOGO_PREFIX}${workspaceId}-${Date.now()}${String(randomInt(1_000_000_000)).padStart(9, '0')}.png`;
 
 /**
  * The public URL for a stored logo, derived rather than stored.

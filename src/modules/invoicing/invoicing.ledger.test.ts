@@ -15,7 +15,10 @@ import { EntriesService } from '../entries/entries.service';
 import { ObligationsService } from '../cashbook-obligations/obligations.service';
 import { LedgerIntegrityService } from '../../core/ledger/integrity.service';
 import { LedgerReportsService } from '../ledger-reports/ledger-reports.service';
-import { provisionWorkspaceAccounting, ensureCashbookLedgerAccount } from '../../core/ledger/coa.seed';
+import {
+    provisionWorkspaceAccounting,
+    ensureCashbookLedgerAccount,
+} from '../../core/ledger/coa.seed';
 
 const entries = () => resolveService(EntriesService);
 const obligations = () => resolveService(ObligationsService);
@@ -31,7 +34,10 @@ async function fixture() {
     const cashbook = await createCashbook(workspace.id, user.id);
     await testPrisma.$transaction(async (tx: Prisma.TransactionClient) => {
         await ensureCashbookLedgerAccount(tx, {
-            id: cashbook.id, workspaceId: workspace.id, name: cashbook.name, currency: 'UGX',
+            id: cashbook.id,
+            workspaceId: workspace.id,
+            name: cashbook.name,
+            currency: 'UGX',
         });
     });
     const contact = await testPrisma.contact.create({
@@ -42,7 +48,9 @@ async function fixture() {
 
 async function arBalance(workspaceId: string): Promise<string> {
     const ar = await testPrisma.ledgerAccount.findUniqueOrThrow({
-        where: { workspaceId_systemKey_currency: { workspaceId, systemKey: 'AR', currency: 'UGX' } },
+        where: {
+            workspaceId_systemKey_currency: { workspaceId, systemKey: 'AR', currency: 'UGX' },
+        },
     });
     const [row] = await testPrisma.$queryRaw<Array<{ net: Decimal }>>`
         SELECT COALESCE(SUM(debit - credit), 0) AS net
@@ -60,7 +68,10 @@ describe('obligation cancellation', () => {
         const fx = await fixture();
 
         const obligation = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Invoice 1', totalAmount: '1000', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Invoice 1',
+            totalAmount: '1000',
+            contactId: fx.contact.id,
         } as never);
 
         expect(await arBalance(fx.workspace.id)).toBe('1000');
@@ -83,19 +94,24 @@ describe('obligation cancellation', () => {
         const fx = await fixture();
 
         const obligation = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Invoice 2', totalAmount: '1000', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Invoice 2',
+            totalAmount: '1000',
+            contactId: fx.contact.id,
         } as never);
 
         await entries().createEntry(fx.cashbook.id, fx.user.id, {
-            type: 'INCOME', amount: '400', description: 'part payment', entryDate: isoDate(),
-            obligationId: obligation.id, contactId: fx.contact.id,
+            type: 'INCOME',
+            amount: '400',
+            description: 'part payment',
+            entryDate: isoDate(),
+            obligationId: obligation.id,
+            contactId: fx.contact.id,
         } as never);
 
         expect(await arBalance(fx.workspace.id)).toBe('600');
 
-        await obligations().cancelObligation(
-            obligation.id, fx.cashbook.id, fx.user.id, 'bad debt',
-        );
+        await obligations().cancelObligation(obligation.id, fx.cashbook.id, fx.user.id, 'bad debt');
 
         // Only the 600 still owed is written off. The 400 already collected
         // stays recognized as revenue — reversing the whole opening journal
@@ -115,18 +131,28 @@ describe('obligation cancellation', () => {
         const fx = await fixture();
 
         const obligation = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Invoice 3', totalAmount: '500', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Invoice 3',
+            totalAmount: '500',
+            contactId: fx.contact.id,
         } as never);
 
         await entries().createEntry(fx.cashbook.id, fx.user.id, {
-            type: 'INCOME', amount: '500', description: 'paid in full', entryDate: isoDate(),
-            obligationId: obligation.id, contactId: fx.contact.id,
+            type: 'INCOME',
+            amount: '500',
+            description: 'paid in full',
+            entryDate: isoDate(),
+            obligationId: obligation.id,
+            contactId: fx.contact.id,
         } as never);
 
         expect(await arBalance(fx.workspace.id)).toBe('0');
 
         await obligations().cancelObligation(
-            obligation.id, fx.cashbook.id, fx.user.id, 'housekeeping',
+            obligation.id,
+            fx.cashbook.id,
+            fx.user.id,
+            'housekeeping',
         );
 
         // Nothing outstanding, so nothing to write off.
@@ -143,11 +169,20 @@ describe('obligation cancellation', () => {
         });
 
         const obligation = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'PAYABLE', title: 'Bill 1', totalAmount: '750', contactId: supplier.id,
+            type: 'PAYABLE',
+            title: 'Bill 1',
+            totalAmount: '750',
+            contactId: supplier.id,
         } as never);
 
         const ap = await testPrisma.ledgerAccount.findUniqueOrThrow({
-            where: { workspaceId_systemKey_currency: { workspaceId: fx.workspace.id, systemKey: 'AP', currency: 'UGX' } },
+            where: {
+                workspaceId_systemKey_currency: {
+                    workspaceId: fx.workspace.id,
+                    systemKey: 'AP',
+                    currency: 'UGX',
+                },
+            },
         });
         const apBalance = async () => {
             const [row] = await testPrisma.$queryRaw<Array<{ net: Decimal }>>`
@@ -160,7 +195,10 @@ describe('obligation cancellation', () => {
         expect(await apBalance()).toBe('750');
 
         await obligations().cancelObligation(
-            obligation.id, fx.cashbook.id, fx.user.id, 'supplier waived it',
+            obligation.id,
+            fx.cashbook.id,
+            fx.user.id,
+            'supplier waived it',
         );
 
         expect(await apBalance()).toBe('0');
@@ -173,10 +211,16 @@ describe('obligation cancellation', () => {
         const fx = await fixture();
 
         const keep = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Keep', totalAmount: '300', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Keep',
+            totalAmount: '300',
+            contactId: fx.contact.id,
         } as never);
         const cancel = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Cancel', totalAmount: '700', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Cancel',
+            totalAmount: '700',
+            contactId: fx.contact.id,
         } as never);
 
         await obligations().cancelObligation(cancel.id, fx.cashbook.id, fx.user.id, 'void');
@@ -198,7 +242,10 @@ describe('archiving an open obligation', () => {
         const fx = await fixture();
 
         const obligation = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Abandoned', totalAmount: '450', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Abandoned',
+            totalAmount: '450',
+            contactId: fx.contact.id,
         } as never);
 
         expect(await arBalance(fx.workspace.id)).toBe('450');
@@ -216,12 +263,19 @@ describe('archiving an open obligation', () => {
         const fx = await fixture();
 
         const obligation = await obligations().createObligation(fx.cashbook.id, fx.user.id, {
-            type: 'RECEIVABLE', title: 'Settled', totalAmount: '200', contactId: fx.contact.id,
+            type: 'RECEIVABLE',
+            title: 'Settled',
+            totalAmount: '200',
+            contactId: fx.contact.id,
         } as never);
 
         await entries().createEntry(fx.cashbook.id, fx.user.id, {
-            type: 'INCOME', amount: '200', description: 'paid', entryDate: isoDate(),
-            obligationId: obligation.id, contactId: fx.contact.id,
+            type: 'INCOME',
+            amount: '200',
+            description: 'paid',
+            entryDate: isoDate(),
+            obligationId: obligation.id,
+            contactId: fx.contact.id,
         } as never);
 
         await obligations().archiveObligation(obligation.id, fx.cashbook.id, fx.user.id);
