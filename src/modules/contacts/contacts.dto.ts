@@ -3,8 +3,8 @@ import { z } from 'zod';
 // ─── Contact Schemas (extended with type) ──────────────
 
 export const createContactSchema = z.object({
-    name: z.string().min(1, 'Contact name is required').max(200),
-    email: z.string().email().optional(),
+    name: z.string().trim().min(1, 'Contact name is required').max(200),
+    email: z.string().trim().toLowerCase().email().optional(),
     phone: z.string().max(30).optional(),
     company: z.string().max(200).optional(),
     notes: z.string().max(1000).optional(),
@@ -12,8 +12,8 @@ export const createContactSchema = z.object({
 });
 
 export const updateContactSchema = z.object({
-    name: z.string().min(1).max(200).optional(),
-    email: z.string().email().optional(),
+    name: z.string().trim().min(1).max(200).optional(),
+    email: z.string().trim().toLowerCase().email().optional(),
     phone: z.string().max(30).optional(),
     company: z.string().max(200).optional(),
     notes: z.string().max(1000).optional(),
