@@ -520,3 +520,51 @@ describe('receipt authorization and request retries', () => {
         expect(await testPrisma.entry.count()).toBe(1);
     });
 });
+
+describe('authoritative receipt PDF', () => {
+    it('uses the email generator and rejects stale or foreign entry reviews', async () => {
+        const f = await fixture();
+        const contact = await customer(f.workspace.id);
+        const entry = await sale(f, contact.id);
+        const cookie = `accessToken=${jwt.sign({ userId: f.owner.id, email: f.owner.email }, (await import('../../config')).config.JWT_ACCESS_SECRET)}`;
+        const prefix = (await import('../../config')).config.API_PREFIX;
+        const url = `${prefix}/entries/${entry.id}/receipt/pdf/cashbook/${f.cashbook.id}`;
+        const result = await request(app)
+            .get(url)
+            .query({ expectedVersion: entry.version })
+            .set('Cookie', cookie);
+        expect(result.status).toBe(200);
+        expect(result.headers['content-type']).toContain('application/pdf');
+        expect(result.headers['cache-control']).toBe('no-store');
+        expect(generateReceiptPdf).toHaveBeenCalledWith(
+            expect.objectContaining({ entryVersion: entry.version, amountPaid: '25000' }),
+            null,
+        );
+        expect(
+            (
+                await request(app)
+                    .get(url)
+                    .query({ expectedVersion: entry.version + 1 })
+                    .set('Cookie', cookie)
+            ).status,
+        ).toBe(409);
+        expect(
+            (await request(app).get(url).query({ expectedVersion: 'bad' }).set('Cookie', cookie))
+                .status,
+        ).toBe(400);
+        expect((await request(app).get(url)).status).toBe(401);
+        const foreign = await fixture();
+        await expect(service().receiptPdf(entry.id, foreign.cashbook.id)).rejects.toMatchObject({
+            statusCode: 404,
+        });
+    });
+    it('permits a PDF without customer email while preserving email restrictions', async () => {
+        const f = await fixture();
+        const contact = await customer(f.workspace.id, { email: null });
+        const entry = await sale(f, contact.id);
+        await expect(service().receiptPdf(entry.id, f.cashbook.id)).resolves.toBeInstanceOf(Buffer);
+        await expect(
+            service().sendReceipt(entry.id, f.owner.id, f.cashbook.id),
+        ).rejects.toMatchObject({ code: 'NO_EMAIL' });
+    });
+});

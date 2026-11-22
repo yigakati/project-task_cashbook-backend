@@ -123,6 +123,7 @@ export const updateInvoiceSettingsSchema = z.object({
      * uploaded, not linked. See InvoicingService#updateSettings.
      */
     logoUrl: z.string().url().nullable().optional(),
+    artworkUrl: z.null().optional(),
     accentColor: z
         .string()
         .regex(/^#[0-9a-f]{6}$/i, 'Use a six-digit hex colour, e.g. #4F46E5')
@@ -143,5 +144,5 @@ export type InvoiceQueryDto = z.infer<typeof invoiceQuerySchema>;
 export type UpdateInvoiceSettingsDto = z.infer<typeof updateInvoiceSettingsSchema>;
 
 export const invoicePreviewSchema = updateInvoiceSettingsSchema
-    .omit({ logoUrl: true, version: true })
+    .omit({ logoUrl: true, artworkUrl: true, version: true })
     .strict();

@@ -6,7 +6,9 @@ import {
     CustomerProfile,
     WorkspaceProfile,
 } from '@prisma/client';
-import { invoiceTemplate, readInvoiceCustomization } from './invoice-templates';
+import { invoiceTemplate, readInvoiceCustomization, invoiceTheme } from './invoice-templates';
+import { invoiceThemeUrl } from './invoice-theme-assets';
+import { invoiceArtworkUrl } from './invoice-artwork';
 import { invoiceLogoUrl } from './invoice-logo';
 import { formatReceiptMoney } from '../entries/receipt.generator';
 
@@ -52,8 +54,14 @@ function address(value: unknown): string | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
     return (
-        ['line1', 'line2', 'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'country']
-            .map((key) => record[key])
+        [
+            record.line1 ?? record.addressLine1 ?? record.street,
+            record.line2 ?? record.addressLine2,
+            record.city,
+            record.state,
+            record.postalCode,
+            record.country,
+        ]
             .filter((value) => typeof value === 'string' && value.trim())
             .join(', ') || null
     );
@@ -80,6 +88,9 @@ export function buildInvoiceDocument(
         typeof customer[key as keyof typeof customer] === 'string'
             ? String(customer[key as keyof typeof customer])
             : null;
+    const template = invoiceTemplate(settings?.template);
+    const customization = readInvoiceCustomization(settings?.customization);
+    const theme = invoiceTheme(template, customization);
     return {
         invoiceNumber: invoice.invoiceNumber,
         status: invoice.status,
@@ -141,12 +152,19 @@ export function buildInvoiceDocument(
         footer: invoice.footer,
         paymentTerms: invoice.paymentTerms,
         appearance: {
-            template: invoiceTemplate(settings?.template),
+            template,
             accentColor: /^#[0-9a-f]{6}$/i.test(settings?.accentColor ?? '')
-                ? settings!.accentColor!
-                : '#4F46E5',
-            customization: readInvoiceCustomization(settings?.customization),
+                ? settings!.accentColor === '#4F46E5' && 'color' in template
+                    ? template.color
+                    : settings!.accentColor!
+                : 'color' in template
+                  ? template.color
+                  : '#4F46E5',
+            customization,
             logoUrl: invoiceLogoUrl(settings?.logoKey),
+            theme,
+            themeUrl: theme ? invoiceThemeUrl(theme) : null,
+            artworkUrl: invoiceArtworkUrl(settings?.artworkKey),
         },
     };
 }

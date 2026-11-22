@@ -30,3 +30,11 @@ Receipt sends reuse their request ID for retries and reopening with the same rev
 No database migration is required. Deploy backend before frontend. Use `npm run build` so the PDF font assets and their SIL Open Font License are copied into `dist`; the existing Docker build includes them.
 
 Backend: `npm run format:receipts:check`, `npm run typecheck`, `npm test`, `npm run build`, and Prisma validation. Frontend: `pnpm run format:receipts:check`, scoped ESLint, TypeScript, `pnpm test --maxWorkers=1`, and `pnpm run build`.
+
+## One authoritative receipt layout
+
+`GET /entries/:entryId/receipt/pdf/cashbook/:cashbookId` uses the same PDF generator as the email attachment, with VIEW_ENTRIES and the existing cashbook/entry scope checks. Optional positive `expectedVersion` rejects stale entry reviews. Responses are private and `no-store`. JSON receipt data still powers email eligibility and durable request retries.
+
+The PDF reproduces the original frontend receipt card: a centered business header/logo, paired label/value rows, divider lines, shaded amount-paid box, optional obligation totals, notes and centered footer. The 148 mm card sits on A4, with continuation pages for long content.
+
+The frontend loads those PDF bytes through the authenticated API and lazily renders every page with bundled PDF.js. Printing uses the rendered A4 pages, and PDF download preserves the original bytes. No second HTML receipt layout or client money calculation is used for the document. Rendered PDF text is available to assistive technology. Canvas or PDF-loading failures leave the saved entry intact and offer PDF retry/download; they never repeat a financial mutation. Native iOS loads the same bytes through its existing transport bridge. No receipt is emailed to a contact without a valid saved address.

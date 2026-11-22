@@ -1019,14 +1019,16 @@ export class AccountDeletionService {
                 select: { s3Key: true },
             }),
             this.prisma.invoiceSettings.findMany({
-                where: { workspaceId: { in: workspaceIds }, logoKey: { not: null } },
-                select: { logoKey: true },
+                where: { workspaceId: { in: workspaceIds } },
+                select: { logoKey: true, artworkKey: true },
             }),
         ]);
         return [
             ...new Set([
                 ...attachments.map((a) => a.s3Key),
-                ...logos.map((l) => l.logoKey as string),
+                ...logos.flatMap((l) =>
+                    [l.logoKey, l.artworkKey].filter((key): key is string => Boolean(key)),
+                ),
             ]),
         ];
     }

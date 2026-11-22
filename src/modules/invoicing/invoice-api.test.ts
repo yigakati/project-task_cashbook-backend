@@ -65,6 +65,55 @@ async function fixture() {
     return { owner, workspace, invoice: invoice!, input };
 }
 describe('invoice HTTP and delivery', () => {
+    it('previews draft PDFs privately, validates scope and never writes accounting', async () => {
+        const fx = await fixture();
+        const other = await fixture();
+        const path = `/api/v1/workspaces/${fx.workspace.id}/invoices/preview/draft/pdf`;
+        const counts = async () =>
+            Promise.all([
+                testPrisma.invoice.count(),
+                testPrisma.entry.count(),
+                testPrisma.cashbookObligation.count(),
+                testPrisma.journalEntry.count(),
+            ]);
+        const before = await counts();
+        expect((await request(app).post(path).send(fx.input)).status).toBe(401);
+        expect(
+            (await request(app).post(path).set('Cookie', cookie(other.owner)).send(fx.input))
+                .status,
+        ).toBe(403);
+        expect(
+            (await request(app).post(path).set('Cookie', cookie(fx.owner)).send({})).status,
+        ).toBe(400);
+        expect(
+            (
+                await request(app)
+                    .post(path)
+                    .set('Cookie', cookie(fx.owner))
+                    .send({ ...fx.input, customerId: other.input.customerId })
+            ).status,
+        ).toBe(404);
+        expect(
+            (
+                await request(app)
+                    .post(path)
+                    .set('Cookie', cookie(fx.owner))
+                    .send({ ...fx.input, cashbookId: other.input.cashbookId })
+            ).status,
+        ).toBe(404);
+        const pdf = await request(app).post(path).set('Cookie', cookie(fx.owner)).send(fx.input);
+        expect(pdf.status).toBe(200);
+        expect(pdf.headers['cache-control']).toBe('no-store');
+        expect(pdf.headers['content-type']).toContain('application/pdf');
+        expect(pdf.body.subarray(0, 5).toString()).toBe('%PDF-');
+        const viewer = await createUser();
+        await addWorkspaceMember(fx.workspace.id, viewer.id, 'MEMBER');
+        expect(
+            (await request(app).post(path).set('Cookie', cookie(viewer)).send(fx.input)).status,
+        ).toBe(403);
+        expect(await counts()).toEqual(before);
+        expect(sendEmail).not.toHaveBeenCalled();
+    });
     it('enforces workspace authorization and returns private document/PDF responses', async () => {
         const fx = await fixture();
         const other = await fixture();

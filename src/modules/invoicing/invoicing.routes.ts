@@ -57,6 +57,13 @@ router.patch(
 );
 
 router.post(
+    '/settings/current/artwork',
+    requireWorkspaceMember(WorkspacePermission.MANAGE_INVOICING) as any,
+    uploadImageMemory.single('file') as any,
+    controller.uploadArtwork.bind(controller) as any,
+);
+
+router.post(
     '/settings/current/logo',
     requireWorkspaceMember(WorkspacePermission.MANAGE_INVOICING) as any,
     uploadImageMemory.single('file') as any,
@@ -68,6 +75,12 @@ router.post(
     requireWorkspaceMember(WorkspacePermission.MANAGE_INVOICING) as any,
     validate(createInvoiceSchema),
     controller.draftDocument.bind(controller) as any,
+);
+router.post(
+    '/preview/draft/pdf',
+    requireWorkspaceMember(WorkspacePermission.MANAGE_INVOICING) as any,
+    validate(createInvoiceSchema),
+    controller.draftPdf.bind(controller) as any,
 );
 router.post(
     '/settings/preview',

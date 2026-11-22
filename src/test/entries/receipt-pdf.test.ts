@@ -5,6 +5,23 @@ import {
     ReceiptDocument,
 } from '../../modules/entries/receipt.generator';
 import { StorageService } from '../../modules/files/storage.service';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+function extract(pdf: Buffer, bbox = false) {
+    const directory = mkdtempSync(join(tmpdir(), 'receipt-layout-'));
+    const path = join(directory, 'receipt.pdf');
+    try {
+        writeFileSync(path, pdf);
+        return execFileSync('pdftotext', [bbox ? '-bbox' : '-layout', path, '-'], {
+            encoding: 'utf8',
+        });
+    } finally {
+        rmSync(directory, { recursive: true, force: true });
+    }
+}
 
 const model: ReceiptDocument = {
     receiptNumber: 'RCPT-1001',
@@ -50,11 +67,60 @@ describe('receipt PDF generation', () => {
         const pdf = await generateReceiptPdf(
             {
                 ...model,
-                business: { ...model.business, notes: 'Long receipt details. '.repeat(700) },
+                customer: { ...model.customer, name: 'Customer'.repeat(500) },
+                business: {
+                    ...model.business,
+                    notes: 'Long receipt details. '.repeat(700) + ' FINAL-NOTE',
+                },
             },
             null,
         );
         const pages = pdf.toString('latin1').match(/\/Type \/Page\b/g);
         expect(pages!.length).toBeGreaterThan(1);
+        const content = extract(pdf);
+        expect(content).toContain('FINAL-NOTE');
+        expect(content).toContain('25,000.125');
+        expect(content).toContain('Thank you for your payment.');
     });
+    it('centers the original business header and aligns receipt values in a narrow card', async () => {
+        const pdf = await generateReceiptPdf(model, null);
+        const bbox = extract(pdf, true);
+        const words = Array.from(
+            bbox.matchAll(
+                /<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]+)<\/word>/g,
+            ),
+        );
+        const name = words.find((word) => word[5] === 'Kampala')!;
+        const endName = words.find((word) => word[5] === 'Supplies')!;
+        expect((Number(name[1]) + Number(endName[3])) / 2).toBeCloseTo(595.28 / 2, 1);
+        const number = words.find((word) => word[5] === model.receiptNumber)!;
+        const label = words.find((word) => word[5] === 'Receipt')!;
+        expect(Number(number[2])).toBeCloseTo(Number(label[2]), 1);
+        expect(Number(label[1])).toBeGreaterThan(100);
+        expect(Number(number[3])).toBeLessThan(495);
+        expect(Number(number[1])).toBeGreaterThan(400);
+        expect(extract(pdf)).toContain('Amount paid');
+    });
+    it.each(['25.125', '0'])(
+        'includes obligation totals and balance %s without changing precision',
+        async (outstandingAmount) => {
+            const content = extract(
+                await generateReceiptPdf(
+                    {
+                        ...model,
+                        obligation: {
+                            title: 'Services due',
+                            totalAmount: '25025.25',
+                            outstandingAmount,
+                        },
+                    },
+                    null,
+                ),
+            );
+            expect(content).toContain('Total due');
+            expect(content).toContain('25,025.25');
+            expect(content).toContain('Balance remaining');
+            expect(content).toContain(outstandingAmount === '0' ? 'Paid in full' : '25.125');
+        },
+    );
 });

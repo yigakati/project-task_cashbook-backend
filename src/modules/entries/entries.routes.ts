@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { getPrismaClient } from '../../config/database';
 import { NotFoundError } from '../../core/errors/AppError';
 import { Router } from 'express';
@@ -140,14 +141,14 @@ router.get(
 );
 
 // ─── Receipts ──────────────────────────────────────────
-/*
- * The receipt as JSON, for on-screen preview and printing.
- *
- * Printing is the client's job — it already has the page open, and the browser
- * prints better than we do. Emailing stays server-side below, because the
- * recipient never loads our page. Both read the same model so the printed and
- * emailed copies cannot disagree.
- */
+// Preview and print use the same PDF generator as email; JSON supplies action metadata.
+router.get(
+    '/:entryId/receipt/pdf/cashbook/:cashbookId',
+    validate(uuidParams('entryId', 'cashbookId'), 'params'),
+    requireCashbookMember(CashbookPermission.VIEW_ENTRIES) as any,
+    validate(z.object({ expectedVersion: z.coerce.number().int().positive().optional() }), 'query'),
+    entriesController.receiptPdf.bind(entriesController) as any,
+);
 router.get(
     '/:entryId/receipt/cashbook/:cashbookId',
     validate(uuidParams('entryId', 'cashbookId'), 'params'),

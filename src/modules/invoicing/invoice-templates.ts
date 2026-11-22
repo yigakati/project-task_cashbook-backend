@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { invoiceThemeIds } from './invoice-theme-assets';
 
 export const invoiceTemplateIds = [
     'classic',
@@ -11,6 +12,7 @@ export const invoiceTemplateIds = [
     'editorial',
     'studio',
     'signature',
+    ...invoiceThemeIds,
 ] as const;
 export type InvoiceTemplateId = (typeof invoiceTemplateIds)[number];
 
@@ -106,6 +108,152 @@ export const invoiceTemplates = [
         table: 'ruled',
         font: 'serif',
     },
+    {
+        id: 'outline',
+        name: 'Blueprint',
+        tier: 'professional',
+        description:
+            'A fine blue frame, paired customer and reference details, and a clear balance bar.',
+        header: 'rule',
+        table: 'striped',
+        font: 'sans',
+        theme: 'outline',
+        layout: 'compact',
+        color: '#3267C8',
+    },
+    {
+        id: 'marble',
+        name: 'Mineral',
+        tier: 'premium',
+        description: 'Soft mineral artwork behind a readable white invoice body.',
+        header: 'minimal',
+        table: 'striped',
+        font: 'sans',
+        theme: 'marble',
+        layout: 'compact',
+        color: '#233747',
+    },
+    {
+        id: 'wave',
+        name: 'Noir Wave',
+        tier: 'premium',
+        description: 'A black curved masthead and layered silver waves.',
+        header: 'dark',
+        table: 'striped',
+        font: 'sans',
+        theme: 'wave',
+        layout: 'compact',
+        color: '#172033',
+    },
+    {
+        id: 'workshop',
+        name: 'Workshop',
+        tier: 'premium',
+        description:
+            'An illustrated industrial masthead; replace its artwork with a business photo when customization is available.',
+        header: 'dark',
+        table: 'striped',
+        font: 'sans',
+        theme: 'workshop',
+        layout: 'compact',
+        color: '#353A40',
+    },
+    {
+        id: 'panel',
+        name: 'Navy Panel',
+        tier: 'professional',
+        description: 'A navy surround with a white document panel and geometric footer.',
+        header: 'dark',
+        table: 'striped',
+        font: 'sans',
+        theme: 'panel',
+        layout: 'compact',
+        color: '#243458',
+    },
+    {
+        id: 'ribbon',
+        name: 'Ribbon',
+        tier: 'premium',
+        description: 'A tailored navy banner with angled silver ribbon accents.',
+        header: 'dark',
+        table: 'striped',
+        font: 'sans',
+        theme: 'ribbon',
+        layout: 'compact',
+        color: '#203263',
+    },
+    {
+        id: 'watermark',
+        name: 'Brandmark',
+        tier: 'premium',
+        description: 'A crisp red table with a subtle business-logo watermark.',
+        header: 'minimal',
+        table: 'striped',
+        font: 'sans',
+        theme: 'watermark',
+        layout: 'compact',
+        color: '#C53432',
+    },
+    {
+        id: 'estate',
+        name: 'Architecture',
+        tier: 'premium',
+        description: 'An original architectural illustration in a muted teal masthead.',
+        header: 'banner',
+        table: 'striped',
+        font: 'sans',
+        theme: 'estate',
+        layout: 'compact',
+        color: '#51808A',
+    },
+    {
+        id: 'angle',
+        name: 'Prism',
+        tier: 'premium',
+        description: 'A bold green diagonal with generous white space for line items.',
+        header: 'minimal',
+        table: 'striped',
+        font: 'sans',
+        theme: 'angle',
+        layout: 'compact',
+        color: '#087C62',
+    },
+    {
+        id: 'pastel',
+        name: 'Aura',
+        tier: 'premium',
+        description: 'A pastel blue and rose masthead with a sky-blue table.',
+        header: 'minimal',
+        table: 'striped',
+        font: 'sans',
+        theme: 'pastel',
+        layout: 'compact',
+        color: '#287CAE',
+    },
+    {
+        id: 'botanical',
+        name: 'Botanical',
+        tier: 'premium',
+        description: 'Light leaf-like side ribbons and fresh green headings.',
+        header: 'minimal',
+        table: 'striped',
+        font: 'sans',
+        theme: 'botanical',
+        layout: 'compact',
+        color: '#3D872F',
+    },
+    {
+        id: 'mesh',
+        name: 'Lattice',
+        tier: 'premium',
+        description: 'Fine geometric linework with a restrained indigo summary.',
+        header: 'minimal',
+        table: 'striped',
+        font: 'sans',
+        theme: 'mesh',
+        layout: 'compact',
+        color: '#20336A',
+    },
 ] as const;
 
 export const invoiceCustomizationSchema = z
@@ -115,6 +263,9 @@ export const invoiceCustomizationSchema = z
         tableStyle: z.enum(['template', 'striped', 'ruled', 'minimal']).default('template'),
         logoPlacement: z.enum(['left', 'right']).default('left'),
         paperSize: z.enum(['A4', 'LETTER']).default('A4'),
+        theme: z.enum(['template', 'none', ...invoiceThemeIds]).default('template'),
+        artworkPlacement: z.enum(['header', 'background', 'watermark']).default('header'),
+        artworkOpacity: z.number().min(0.04).max(0.25).default(0.12),
     })
     .strict();
 export type InvoiceCustomization = z.infer<typeof invoiceCustomizationSchema>;
@@ -148,4 +299,17 @@ export function invoiceDesignAccess(
                 ? 'paid_plan'
                 : 'paid_plan_required',
     };
+}
+
+export function invoiceTheme(
+    template: ReturnType<typeof invoiceTemplate>,
+    customization: InvoiceCustomization,
+) {
+    return customization.theme === 'none'
+        ? null
+        : customization.theme === 'template'
+          ? 'theme' in template
+              ? template.theme
+              : null
+          : customization.theme;
 }

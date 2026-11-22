@@ -230,6 +230,24 @@ export class EntriesController {
         }
     }
 
+    async receiptPdf(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const version = req.query.expectedVersion
+                ? Number(req.query.expectedVersion)
+                : undefined;
+            const pdf = await this.entriesService.receiptPdf(
+                req.params.entryId as string,
+                req.params.cashbookId as string,
+                version,
+            );
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('Content-Disposition', 'inline; filename="receipt.pdf"');
+            res.type('application/pdf').send(pdf);
+        } catch (error) {
+            next(error);
+        }
+    }
+
     async sendReceipt(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const data = await this.entriesService.sendReceipt(

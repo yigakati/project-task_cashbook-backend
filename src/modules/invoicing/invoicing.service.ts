@@ -35,6 +35,13 @@ import sharp from 'sharp';
 import { logger } from '../../utils/logger';
 import { StorageService } from '../files/storage.service';
 import { assertCashbookWritable } from '../cashbooks/cashbook-state';
+import {
+    ARTWORK_FILE_PATTERN,
+    ARTWORK_PREFIX,
+    artworkObjectKey,
+    invoiceArtworkUrl,
+    normalizeInvoiceArtwork,
+} from './invoice-artwork';
 import { LOGO_FILE_PATTERN, LOGO_PREFIX, invoiceLogoUrl, logoObjectKey } from './invoice-logo';
 import { assertStorageAvailable, lockWorkspaceStorage } from '../storage/storage-quota.service';
 
@@ -72,8 +79,14 @@ export class InvoicingService {
      * logoUrl is derived from the stored key rather than kept in a column, so
      * it is always right for the address this deployment answers on.
      */
-    private withLogoUrl<T extends { logoKey: string | null }>(settings: T) {
-        return { ...settings, logoUrl: invoiceLogoUrl(settings.logoKey) };
+    private withLogoUrl<T extends { logoKey: string | null; artworkKey?: string | null }>(
+        settings: T,
+    ) {
+        return {
+            ...settings,
+            logoUrl: invoiceLogoUrl(settings.logoKey),
+            artworkUrl: invoiceArtworkUrl(settings.artworkKey),
+        };
     }
 
     // ═══════════════════════════════════════════════════════
@@ -1054,7 +1067,7 @@ export class InvoicingService {
     }
 
     async draftDocument(workspaceId: string, dto: CreateInvoiceDto) {
-        const [settings, workspace, profile, customer] = await Promise.all([
+        const [settings, workspace, profile, customer, cashbook] = await Promise.all([
             this.repository.getInvoiceSettings(workspaceId),
             this.prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } }),
             this.prisma.workspaceProfile.findUnique({ where: { workspaceId } }),
@@ -1062,9 +1075,16 @@ export class InvoicingService {
                 where: { id: dto.customerId, workspaceId, type: 'CUSTOMER' },
                 include: { customerProfile: true },
             }),
+            this.prisma.cashbook.findFirst({
+                where: { id: dto.cashbookId, workspaceId, isActive: true },
+                select: { id: true, currency: true, archivedAt: true },
+            }),
         ]);
         if (!customer) throw new NotFoundError('Customer');
+        if (!cashbook) throw new NotFoundError('Cashbook');
+        assertCashbookWritable(cashbook);
         assertSameCurrency(workspace.defaultCurrency, dto.currency, 'workspace vs invoice');
+        assertSameCurrency(cashbook.currency, workspace.defaultCurrency, 'invoice vs cashbook');
         if (new Date(dto.dueDate) < new Date(dto.issueDate))
             throw new AppError(
                 'Due date must be on or after the issue date',
@@ -1113,13 +1133,19 @@ export class InvoicingService {
     async invoicePdf(invoiceId: string, workspaceId: string) {
         const document = await this.invoiceDocument(invoiceId, workspaceId);
         const settings = await this.repository.getInvoiceSettings(workspaceId);
-        return renderInvoicePdf(document, settings?.logoKey);
+        return renderInvoicePdf(document, settings?.logoKey, settings?.artworkKey);
+    }
+
+    async draftPdf(workspaceId: string, dto: CreateInvoiceDto) {
+        const document = await this.draftDocument(workspaceId, dto);
+        const settings = await this.repository.getInvoiceSettings(workspaceId);
+        return renderInvoicePdf(document, settings?.logoKey, settings?.artworkKey);
     }
 
     async previewPdf(workspaceId: string, dto: UpdateInvoiceSettingsDto) {
         const document = await this.previewDocument(workspaceId, dto);
         const settings = await this.repository.getInvoiceSettings(workspaceId);
-        return renderInvoicePdf(document, settings?.logoKey);
+        return renderInvoicePdf(document, settings?.logoKey, settings?.artworkKey);
     }
 
     /**
@@ -1152,12 +1178,18 @@ export class InvoicingService {
                 );
             }
             await this.assertDesignAccess(workspaceId, dto, current);
-            const { logoUrl, version, ...fields } = dto;
+            const { logoUrl, artworkUrl, version, ...fields } = dto;
             const data: Prisma.InvoiceSettingsUpdateInput = {
                 ...fields,
                 version: { increment: 1 },
             };
             let orphanedLogoKey: string | null = null;
+            let orphanedArtworkKey: string | null = null;
+            if (artworkUrl === null) {
+                data.artworkKey = null;
+                data.artworkSize = null;
+                orphanedArtworkKey = current.artworkKey;
+            }
             if (logoUrl !== undefined && logoUrl !== invoiceLogoUrl(current.logoKey)) {
                 if (logoUrl !== null)
                     throw new AppError(
@@ -1179,14 +1211,97 @@ export class InvoicingService {
                     resourceId: settings.id,
                 },
             });
-            return { settings, orphanedLogoKey };
+            return { settings, orphanedLogoKey, orphanedArtworkKey };
         });
         if (result.orphanedLogoKey) await this.deleteLogoObject(result.orphanedLogoKey);
+        if (result.orphanedArtworkKey) await this.deleteLogoObject(result.orphanedArtworkKey);
         return {
             ...this.withLogoUrl(result.settings),
             access: await this.designAccess(workspaceId),
             templates: invoiceTemplates,
         };
+    }
+
+    /** Uploaded decorations follow the same workspace storage lock as logos and attachments. */
+    async uploadArtwork(workspaceId: string, userId: string, file: Express.Multer.File) {
+        await this.getSettings(workspaceId);
+        if (!(await this.designAccess(workspaceId)).customizationAllowed)
+            throw new AppError(
+                'Invoice artwork upload requires advanced customization access.',
+                403,
+                'INVOICE_CUSTOMIZATION_LOCKED',
+            );
+        const buffer = await normalizeInvoiceArtwork(file);
+        const before = await this.prisma.invoiceSettings.findUniqueOrThrow({
+            where: { workspaceId },
+        });
+        await assertStorageAvailable(
+            this.prisma,
+            workspaceId,
+            buffer.length,
+            before.artworkSize ?? 0,
+        );
+        const key = artworkObjectKey(workspaceId);
+        await this.storage.uploadBuffer(key, buffer, 'image/png');
+        let result;
+        try {
+            result = await this.prisma.$transaction(async (tx) => {
+                await lockWorkspaceStorage(tx, workspaceId);
+                if (!(await this.designAccess(workspaceId)).customizationAllowed)
+                    throw new AppError(
+                        'Advanced customization is unavailable.',
+                        403,
+                        'INVOICE_CUSTOMIZATION_LOCKED',
+                    );
+                const current = await tx.invoiceSettings.findUniqueOrThrow({
+                    where: { workspaceId },
+                });
+                await assertStorageAvailable(
+                    tx,
+                    workspaceId,
+                    buffer.length,
+                    current.artworkSize ?? 0,
+                );
+                const settings = await tx.invoiceSettings.update({
+                    where: { workspaceId },
+                    data: { artworkKey: key, artworkSize: buffer.length },
+                });
+                await tx.auditLog.create({
+                    data: {
+                        userId,
+                        workspaceId,
+                        action: AuditAction.INVOICE_SETTINGS_UPDATED,
+                        resource: 'invoice_settings',
+                        resourceId: settings.id,
+                        details: { artworkUpdated: true },
+                    },
+                });
+                return { settings, previousKey: current.artworkKey };
+            });
+        } catch (error) {
+            await this.deleteLogoObject(key);
+            throw error;
+        }
+        if (result.previousKey) await this.deleteLogoObject(result.previousKey);
+        return {
+            ...this.withLogoUrl(result.settings),
+            access: await this.designAccess(workspaceId),
+            templates: invoiceTemplates,
+        };
+    }
+
+    async resolveArtworkKey(file: string) {
+        if (!ARTWORK_FILE_PATTERN.test(file)) throw new NotFoundError('Invoice artwork');
+        const settings = await this.prisma.invoiceSettings.findFirst({
+            where: {
+                workspaceId: file.slice(0, 36),
+                artworkKey: `${ARTWORK_PREFIX}${file}`,
+                workspace: { isActive: true },
+            },
+            select: { artworkKey: true },
+        });
+        if (!settings?.artworkKey) throw new NotFoundError('Invoice artwork');
+        return settings.artworkKey;
     }
 
     async uploadLogo(workspaceId: string, userId: string, file: Express.Multer.File) {

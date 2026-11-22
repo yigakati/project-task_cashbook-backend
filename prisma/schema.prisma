@@ -2217,6 +2217,9 @@ model InvoiceSettings {
   logoKey       String?  @map("logo_key")
   /// Bytes the logo takes against the workspace storage allowance.
   logoSize      Int?     @map("logo_size")
+  /// Optional decorative invoice artwork, normalized to PNG and charged to storage.
+  artworkKey    String?  @map("artwork_key")
+  artworkSize   Int?     @map("artwork_size")
   accentColor   String?  @default("#4F46E5") @map("accent_color")
   template      String   @default("classic")
   customization Json     @default("{}")

@@ -7,6 +7,7 @@ import {
     NotificationEntityType,
 } from '@prisma/client';
 import { StorageService } from '../files/storage.service';
+import { invoiceArtworkUrl } from '../invoicing/invoice-artwork';
 import { invoiceLogoUrl } from '../invoicing/invoice-logo';
 import {
     AppError,
@@ -33,8 +34,9 @@ export const gbToBytes = (gb: number): number => Math.round(gb * GIB);
 
 export type StorageFileKind = 'entry' | 'task' | 'report' | 'claim' | 'housing';
 
-const KIND_LABELS: Record<StorageFileKind | 'logo', string> = {
+const KIND_LABELS: Record<StorageFileKind | 'logo' | 'artwork', string> = {
     logo: 'Invoice logo',
+    artwork: 'Invoice artwork',
     housing: 'Unit photos',
     entry: 'Entry attachments',
     task: 'Task files',
@@ -74,7 +76,9 @@ export async function getStorageLimitBytes(db: DbClient, workspaceId: string): P
     });
     if (!workspace) throw new NotFoundError('Workspace');
     const [granted, fromPlan] = await Promise.all([
-        workspace.storageQuotaBytes != null ? Number(workspace.storageQuotaBytes) : getDefaultQuotaBytes(db),
+        workspace.storageQuotaBytes != null
+            ? Number(workspace.storageQuotaBytes)
+            : getDefaultQuotaBytes(db),
         planStorageBytes(db, workspace.ownerId),
     ]);
     return Math.max(granted, fromPlan ?? 0);
@@ -93,9 +97,14 @@ export async function getStorageUsedBytes(db: DbClient, workspaceId: string): Pr
             where: { workspaceId, isDeleted: false },
             _sum: { fileSize: true },
         }),
-        db.invoiceSettings.findUnique({ where: { workspaceId }, select: { logoSize: true } }),
+        db.invoiceSettings.findUnique({
+            where: { workspaceId },
+            select: { logoSize: true, artworkSize: true },
+        }),
     ]);
-    return (attachments._sum.fileSize ?? 0) + (settings?.logoSize ?? 0);
+    return (
+        (attachments._sum.fileSize ?? 0) + (settings?.logoSize ?? 0) + (settings?.artworkSize ?? 0)
+    );
 }
 
 /**
@@ -152,46 +161,69 @@ export class StorageQuotaService {
     constructor(
         private storage: StorageService,
         @inject('PrismaClient') private prisma: PrismaClient,
-    ) { }
+    ) {}
 
     async getOverview(workspaceId: string) {
         await this.backfillLogoSize(workspaceId);
 
         const live = { workspaceId, isDeleted: false };
-        const [limitBytes, workspace, settings, pendingRequest, lastDecision, ...kindTotals] = await Promise.all([
-            getStorageLimitBytes(this.prisma, workspaceId),
-            this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { storageQuotaBytes: true } }),
-            this.prisma.invoiceSettings.findUnique({
-                where: { workspaceId },
-                select: { logoKey: true, logoSize: true },
-            }),
-            this.prisma.storageQuotaRequest.findFirst({
-                where: { workspaceId, status: StorageRequestStatus.PENDING },
-                select: { id: true, requestedBytes: true, reason: true, createdAt: true },
-            }),
-            this.prisma.storageQuotaRequest.findFirst({
-                where: {
-                    workspaceId,
-                    status: { in: [StorageRequestStatus.APPROVED, StorageRequestStatus.DECLINED] },
-                },
-                orderBy: { decidedAt: 'desc' },
-                select: {
-                    id: true, status: true, requestedBytes: true, grantedBytes: true,
-                    decisionNote: true, decidedAt: true,
-                },
-            }),
-            ...(Object.keys(KIND_FILTERS) as StorageFileKind[]).map((kind) =>
-                this.prisma.attachment.aggregate({
-                    where: { ...live, ...KIND_FILTERS[kind] },
-                    _sum: { fileSize: true },
-                    _count: { _all: true },
-                }).then((r) => ({ kind, bytes: r._sum.fileSize ?? 0, count: r._count._all })),
-            ),
-        ]);
+        const [limitBytes, workspace, settings, pendingRequest, lastDecision, ...kindTotals] =
+            await Promise.all([
+                getStorageLimitBytes(this.prisma, workspaceId),
+                this.prisma.workspace.findUnique({
+                    where: { id: workspaceId },
+                    select: { storageQuotaBytes: true },
+                }),
+                this.prisma.invoiceSettings.findUnique({
+                    where: { workspaceId },
+                    select: { logoKey: true, logoSize: true, artworkKey: true, artworkSize: true },
+                }),
+                this.prisma.storageQuotaRequest.findFirst({
+                    where: { workspaceId, status: StorageRequestStatus.PENDING },
+                    select: { id: true, requestedBytes: true, reason: true, createdAt: true },
+                }),
+                this.prisma.storageQuotaRequest.findFirst({
+                    where: {
+                        workspaceId,
+                        status: {
+                            in: [StorageRequestStatus.APPROVED, StorageRequestStatus.DECLINED],
+                        },
+                    },
+                    orderBy: { decidedAt: 'desc' },
+                    select: {
+                        id: true,
+                        status: true,
+                        requestedBytes: true,
+                        grantedBytes: true,
+                        decisionNote: true,
+                        decidedAt: true,
+                    },
+                }),
+                ...(Object.keys(KIND_FILTERS) as StorageFileKind[]).map((kind) =>
+                    this.prisma.attachment
+                        .aggregate({
+                            where: { ...live, ...KIND_FILTERS[kind] },
+                            _sum: { fileSize: true },
+                            _count: { _all: true },
+                        })
+                        .then((r) => ({ kind, bytes: r._sum.fileSize ?? 0, count: r._count._all })),
+                ),
+            ]);
 
         const logoBytes = settings?.logoSize ?? 0;
         const breakdown = [
-            { kind: 'logo' as const, label: KIND_LABELS.logo, bytes: logoBytes, count: settings?.logoKey ? 1 : 0 },
+            {
+                kind: 'logo' as const,
+                label: KIND_LABELS.logo,
+                bytes: logoBytes,
+                count: settings?.logoKey ? 1 : 0,
+            },
+            {
+                kind: 'artwork' as const,
+                label: KIND_LABELS.artwork,
+                bytes: settings?.artworkSize ?? 0,
+                count: settings?.artworkKey ? 1 : 0,
+            },
             ...kindTotals.map((t) => ({ ...t, label: KIND_LABELS[t.kind] })),
         ];
         const usedBytes = breakdown.reduce((sum, b) => sum + b.bytes, 0);
@@ -200,28 +232,42 @@ export class StorageQuotaService {
             usedBytes,
             limitBytes,
             remainingBytes: Math.max(0, limitBytes - usedBytes),
-            percentUsed: limitBytes > 0 ? Math.min(100, Math.round((usedBytes / limitBytes) * 1000) / 10) : 100,
+            percentUsed:
+                limitBytes > 0
+                    ? Math.min(100, Math.round((usedBytes / limitBytes) * 1000) / 10)
+                    : 100,
             isDefaultLimit: workspace?.storageQuotaBytes == null,
             breakdown,
             logo: settings?.logoKey
                 ? { url: invoiceLogoUrl(settings.logoKey), bytes: logoBytes }
+                : null,
+            artwork: settings?.artworkKey
+                ? { url: invoiceArtworkUrl(settings.artworkKey), bytes: settings.artworkSize ?? 0 }
                 : null,
             pendingRequest: pendingRequest
                 ? { ...pendingRequest, requestedBytes: Number(pendingRequest.requestedBytes) }
                 : null,
             lastDecision: lastDecision
                 ? {
-                    ...lastDecision,
-                    requestedBytes: Number(lastDecision.requestedBytes),
-                    grantedBytes: lastDecision.grantedBytes != null ? Number(lastDecision.grantedBytes) : null,
-                }
+                      ...lastDecision,
+                      requestedBytes: Number(lastDecision.requestedBytes),
+                      grantedBytes:
+                          lastDecision.grantedBytes != null
+                              ? Number(lastDecision.grantedBytes)
+                              : null,
+                  }
                 : null,
         };
     }
 
     async listFiles(
         workspaceId: string,
-        params: { page: number; limit: number; kind: StorageFileKind | 'all'; sort: 'size' | 'recent' },
+        params: {
+            page: number;
+            limit: number;
+            kind: StorageFileKind | 'all';
+            sort: 'size' | 'recent';
+        },
     ) {
         const where: Prisma.AttachmentWhereInput = {
             workspaceId,
@@ -235,15 +281,24 @@ export class StorageQuotaService {
                 where,
                 // Largest first by default: the storage view is where someone
                 // goes to free space, and that is the order that helps.
-                orderBy: params.sort === 'recent'
-                    ? [{ createdAt: 'desc' }]
-                    : [{ fileSize: 'desc' }, { createdAt: 'desc' }],
+                orderBy:
+                    params.sort === 'recent'
+                        ? [{ createdAt: 'desc' }]
+                        : [{ fileSize: 'desc' }, { createdAt: 'desc' }],
                 skip: (params.page - 1) * params.limit,
                 take: params.limit,
                 select: {
-                    id: true, fileName: true, fileSize: true, mimeType: true, createdAt: true,
-                    cashbookId: true, taskId: true, taskReportId: true, expenseClaimId: true,
-                    uploadedById: true, housingUnitId: true,
+                    id: true,
+                    fileName: true,
+                    fileSize: true,
+                    mimeType: true,
+                    createdAt: true,
+                    cashbookId: true,
+                    taskId: true,
+                    taskReportId: true,
+                    expenseClaimId: true,
+                    uploadedById: true,
+                    housingUnitId: true,
                     housingUnit: { select: { name: true, property: { select: { name: true } } } },
                     cashbook: { select: { name: true } },
                     entry: { select: { description: true } },
@@ -269,13 +324,14 @@ export class StorageQuotaService {
                     : r.taskReportId
                       ? 'report'
                       : 'claim';
-            const context = kind === 'housing' && r.housingUnit
-                ? `${r.housingUnit.property.name} · ${r.housingUnit.name}`
-                : kind === 'entry'
-                  ? [r.cashbook?.name, r.entry?.description].filter(Boolean).join(' · ') || null
-                  : kind === 'task'
-                    ? r.task?.title ?? null
-                    : null;
+            const context =
+                kind === 'housing' && r.housingUnit
+                    ? `${r.housingUnit.property.name} · ${r.housingUnit.name}`
+                    : kind === 'entry'
+                      ? [r.cashbook?.name, r.entry?.description].filter(Boolean).join(' · ') || null
+                      : kind === 'task'
+                        ? (r.task?.title ?? null)
+                        : null;
             const uploader = byId.get(r.uploadedById);
             return {
                 id: r.id,
@@ -286,7 +342,9 @@ export class StorageQuotaService {
                 kind,
                 kindLabel: KIND_LABELS[kind],
                 context,
-                uploadedBy: uploader ? { firstName: uploader.firstName, lastName: uploader.lastName } : null,
+                uploadedBy: uploader
+                    ? { firstName: uploader.firstName, lastName: uploader.lastName }
+                    : null,
             };
         });
 
@@ -330,7 +388,9 @@ export class StorageQuotaService {
             // The partial unique index on (workspace_id) WHERE status =
             // 'PENDING' is what actually prevents a second one.
             if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-                throw new ConflictError('This workspace already has a storage request waiting for review.');
+                throw new ConflictError(
+                    'This workspace already has a storage request waiting for review.',
+                );
             }
             throw error;
         }
@@ -371,7 +431,9 @@ export class StorageQuotaService {
     // ─── Superadmin ────────────────────────────────────
 
     async listRequests(params: { status?: StorageRequestStatus; page: number; limit: number }) {
-        const where: Prisma.StorageQuotaRequestWhereInput = params.status ? { status: params.status } : {};
+        const where: Prisma.StorageQuotaRequestWhereInput = params.status
+            ? { status: params.status }
+            : {};
         const [total, rows] = await Promise.all([
             this.prisma.storageQuotaRequest.count({ where }),
             this.prisma.storageQuotaRequest.findMany({
@@ -382,7 +444,9 @@ export class StorageQuotaService {
                 include: {
                     workspace: {
                         select: {
-                            id: true, name: true, type: true,
+                            id: true,
+                            name: true,
+                            type: true,
                             owner: { select: { email: true, firstName: true, lastName: true } },
                         },
                     },
@@ -395,13 +459,20 @@ export class StorageQuotaService {
         // What each workspace is using right now, so the decision is made
         // against real numbers rather than just the ask.
         const workspaceIds = [...new Set(rows.map((r) => r.workspaceId))];
-        const usage = new Map(await Promise.all(workspaceIds.map(async (id) => [
-            id,
-            {
-                usedBytes: await getStorageUsedBytes(this.prisma, id),
-                limitBytes: await getStorageLimitBytes(this.prisma, id),
-            },
-        ] as const)));
+        const usage = new Map(
+            await Promise.all(
+                workspaceIds.map(
+                    async (id) =>
+                        [
+                            id,
+                            {
+                                usedBytes: await getStorageUsedBytes(this.prisma, id),
+                                limitBytes: await getStorageLimitBytes(this.prisma, id),
+                            },
+                        ] as const,
+                ),
+            ),
+        );
 
         const data = rows.map((r) => ({
             ...r,
@@ -418,14 +489,22 @@ export class StorageQuotaService {
         actorId: string,
         dto: { approve: boolean; grantedGb?: number; note?: string },
     ) {
-        const request = await this.prisma.storageQuotaRequest.findUnique({ where: { id: requestId } });
+        const request = await this.prisma.storageQuotaRequest.findUnique({
+            where: { id: requestId },
+        });
         if (!request) throw new NotFoundError('Storage request');
         if (request.status !== StorageRequestStatus.PENDING) {
-            throw new AppError(`This request is already ${request.status.toLowerCase()}`, 409, 'INVALID_STATUS');
+            throw new AppError(
+                `This request is already ${request.status.toLowerCase()}`,
+                409,
+                'INVALID_STATUS',
+            );
         }
 
         const grantedBytes = dto.approve
-            ? (dto.grantedGb != null ? gbToBytes(dto.grantedGb) : Number(request.requestedBytes))
+            ? dto.grantedGb != null
+                ? gbToBytes(dto.grantedGb)
+                : Number(request.requestedBytes)
             : null;
         if (grantedBytes != null && (grantedBytes <= 0 || grantedBytes > MAX_STORAGE_QUOTA_BYTES)) {
             throw new AppError(
@@ -465,7 +544,9 @@ export class StorageQuotaService {
                 data: {
                     userId: actorId,
                     workspaceId: request.workspaceId,
-                    action: dto.approve ? AuditAction.STORAGE_QUOTA_APPROVED : AuditAction.STORAGE_QUOTA_DECLINED,
+                    action: dto.approve
+                        ? AuditAction.STORAGE_QUOTA_APPROVED
+                        : AuditAction.STORAGE_QUOTA_DECLINED,
                     resource: 'storage_quota_request',
                     resourceId: requestId,
                     details: {
@@ -501,12 +582,18 @@ export class StorageQuotaService {
         const offset = (params.page - 1) * params.limit;
 
         const [rows, countRows, defaultQuota] = await Promise.all([
-            this.prisma.$queryRaw<Array<{
-                id: string; name: string; type: string; storage_quota_bytes: bigint | null;
-                used_bytes: bigint; owner_email: string;
-            }>>`
+            this.prisma.$queryRaw<
+                Array<{
+                    id: string;
+                    name: string;
+                    type: string;
+                    storage_quota_bytes: bigint | null;
+                    used_bytes: bigint;
+                    owner_email: string;
+                }>
+            >`
                 SELECT w.id, w.name, w.type::text AS type, w.storage_quota_bytes,
-                       (COALESCE(a.used, 0) + COALESCE(s.logo_size, 0))::bigint AS used_bytes,
+                       (COALESCE(a.used, 0) + COALESCE(s.logo_size, 0) + COALESCE(s.artwork_size, 0))::bigint AS used_bytes,
                        u.email AS owner_email
                 FROM workspaces w
                 JOIN users u ON u.id = w.owner_id
@@ -531,21 +618,34 @@ export class StorageQuotaService {
             type: r.type,
             ownerEmail: r.owner_email,
             usedBytes: Number(r.used_bytes),
-            limitBytes: r.storage_quota_bytes != null ? Number(r.storage_quota_bytes) : defaultQuota,
+            limitBytes:
+                r.storage_quota_bytes != null ? Number(r.storage_quota_bytes) : defaultQuota,
             isDefaultLimit: r.storage_quota_bytes == null,
         }));
 
-        return { data, total: Number(countRows[0]?.count ?? 0), page: params.page, limit: params.limit };
+        return {
+            data,
+            total: Number(countRows[0]?.count ?? 0),
+            page: params.page,
+            limit: params.limit,
+        };
     }
 
     /** Set a workspace's allowance directly, or put it back on the default. */
     async setWorkspaceQuota(workspaceId: string, quotaGb: number | null, actorId: string) {
         const bytes = quotaGb == null ? null : gbToBytes(quotaGb);
         if (bytes != null && (bytes <= 0 || bytes > MAX_STORAGE_QUOTA_BYTES)) {
-            throw new AppError(`Set between 1 byte and ${formatBytes(MAX_STORAGE_QUOTA_BYTES)}.`, 400, 'INVALID_GRANT');
+            throw new AppError(
+                `Set between 1 byte and ${formatBytes(MAX_STORAGE_QUOTA_BYTES)}.`,
+                400,
+                'INVALID_GRANT',
+            );
         }
 
-        const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } });
+        const workspace = await this.prisma.workspace.findUnique({
+            where: { id: workspaceId },
+            select: { id: true },
+        });
         if (!workspace) throw new NotFoundError('Workspace');
 
         await this.prisma.workspace.update({
@@ -560,13 +660,16 @@ export class StorageQuotaService {
                 action: AuditAction.STORAGE_QUOTA_SET,
                 resource: 'workspace',
                 resourceId: workspaceId,
-                details: { quotaBytes: bytes, platformAction: AuditAction.ADMIN_WORKSPACE_ACTION } as any,
+                details: {
+                    quotaBytes: bytes,
+                    platformAction: AuditAction.ADMIN_WORKSPACE_ACTION,
+                } as any,
             },
         });
 
         return {
             workspaceId,
-            limitBytes: bytes ?? await getDefaultQuotaBytes(this.prisma),
+            limitBytes: bytes ?? (await getDefaultQuotaBytes(this.prisma)),
             isDefaultLimit: bytes == null,
         };
     }
@@ -579,7 +682,7 @@ export class StorageQuotaService {
     private async backfillLogoSize(workspaceId: string) {
         const settings = await this.prisma.invoiceSettings.findUnique({
             where: { workspaceId },
-            select: { logoKey: true, logoSize: true },
+            select: { logoKey: true, logoSize: true, artworkKey: true, artworkSize: true },
         });
         if (!settings?.logoKey || settings.logoSize != null) return;
 

@@ -3,7 +3,11 @@ import { resetDatabase, testPrisma } from '../../test/setup';
 import { resolveService } from '../../test/container';
 import { createCashbook, createUser, createWorkspace } from '../../test/factories';
 import { InvoicingService } from './invoicing.service';
-import { invoiceDesignAccess, invoiceTemplates } from './invoice-templates';
+import {
+    invoiceDesignAccess,
+    invoiceTemplates,
+    defaultInvoiceCustomization,
+} from './invoice-templates';
 import { updateInvoiceSettingsSchema } from './invoicing.dto';
 import { config } from '../../config';
 import {
@@ -52,9 +56,9 @@ afterEach(() => {
 });
 
 describe('invoice design policies', () => {
-    it('opens all ten templates now but reserves production customization for subscriptions', () => {
-        expect(invoiceTemplates).toHaveLength(10);
-        expect(invoiceTemplates.filter((t) => t.tier === 'premium')).toHaveLength(4);
+    it('opens the complete template collection now but reserves production customization for subscriptions', () => {
+        expect(invoiceTemplates).toHaveLength(22);
+        expect(invoiceTemplates.filter((t) => t.tier === 'premium')).toHaveLength(14);
         expect(invoiceDesignAccess('production', false, 'FREE')).toMatchObject({
             premiumTemplatesAllowed: true,
             customizationAllowed: false,
@@ -111,6 +115,7 @@ describe('invoice design policies', () => {
         await expect(
             service().updateSettings(fx.workspace.id, fx.user.id, {
                 customization: {
+                    ...defaultInvoiceCustomization,
                     font: 'serif',
                     density: 'compact',
                     tableStyle: 'ruled',

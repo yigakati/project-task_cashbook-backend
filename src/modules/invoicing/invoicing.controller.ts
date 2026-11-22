@@ -290,6 +290,16 @@ export class InvoicingController {
         }
     }
 
+    async draftPdf(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const pdf = await this.service.draftPdf(req.params.workspaceId as string, req.body);
+            res.setHeader('Cache-Control', 'no-store');
+            res.type('application/pdf').send(pdf);
+        } catch (error) {
+            next(error);
+        }
+    }
+
     async previewPdf(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const pdf = await this.service.previewPdf(req.params.workspaceId as string, req.body);
@@ -326,6 +336,29 @@ export class InvoicingController {
             res.setHeader('Cache-Control', 'no-store');
             res.setHeader('Content-Disposition', 'attachment; filename="invoice.pdf"');
             res.type('application/pdf').send(pdf);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async uploadArtwork(
+        req: AuthenticatedRequest,
+        res: Response,
+        next: NextFunction,
+    ): Promise<void> {
+        try {
+            if (!req.file)
+                throw new AppError('Choose an image to upload.', 400, 'INVALID_INVOICE_ARTWORK');
+            const data = await this.service.uploadArtwork(
+                req.params.workspaceId as string,
+                req.user.userId,
+                req.file,
+            );
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: 'Invoice artwork saved',
+                data,
+            });
         } catch (error) {
             next(error);
         }

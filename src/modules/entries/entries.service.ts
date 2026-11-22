@@ -2137,6 +2137,13 @@ export class EntriesService {
         return (await this.receiptData(entryId, cashbookId)).model;
     }
 
+    async receiptPdf(entryId: string, cashbookId: string, expectedVersion?: number) {
+        const { model, settings } = await this.receiptData(entryId, cashbookId);
+        if (expectedVersion !== undefined && expectedVersion !== model.entryVersion)
+            throw new ConflictError('This entry changed. Refresh the receipt before printing.');
+        return generateReceiptPdf(model, settings);
+    }
+
     async sendReceipt(
         entryId: string,
         userId: string,

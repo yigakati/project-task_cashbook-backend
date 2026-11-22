@@ -1,3 +1,4 @@
+import { invoiceThemeIds, invoiceThemePath } from './invoice-theme-assets';
 import { Router, NextFunction, Request, Response } from 'express';
 import { container } from 'tsyringe';
 import { InvoicingService } from './invoicing.service';
@@ -15,6 +16,34 @@ import { StorageService } from '../files/storage.service';
  * name stops working the moment it is replaced.
  */
 export const invoiceLogoRouter = Router();
+
+invoiceLogoRouter.get('/themes/:file', (req, res, next) => {
+    const theme = String(req.params.file).replace(/\.png$/, '');
+    if (!invoiceThemeIds.includes(theme as (typeof invoiceThemeIds)[number])) {
+        res.sendStatus(404);
+        return;
+    }
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.sendFile(invoiceThemePath(theme as (typeof invoiceThemeIds)[number]), (error) => {
+        if (error) next(error);
+    });
+});
+invoiceLogoRouter.get('/artwork/:file', async (req, res, next) => {
+    try {
+        const key = await container
+            .resolve(InvoicingService)
+            .resolveArtworkKey(String(req.params.file));
+        const stream = await container.resolve(StorageService).getObject(key);
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        stream.on('error', next);
+        stream.pipe(res);
+    } catch (error) {
+        next(error);
+    }
+});
 
 invoiceLogoRouter.get('/:file', async (req: Request, res: Response, next: NextFunction) => {
     try {
